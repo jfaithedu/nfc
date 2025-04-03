@@ -31,33 +31,45 @@ if parent_dir not in sys.path:
 if os.path.dirname(parent_dir) not in sys.path:
     sys.path.append(os.path.dirname(parent_dir))
 
-# Try different import approaches
+# Add the current directory to the path to ensure we can import from it
+sys.path.insert(0, current_dir)
+
+# Direct imports from the current directory (most reliable approach for direct execution)
 try:
-    # Try package import first (when running from project root)
-    from modules.nfc import (
-        initialize, shutdown, poll_for_tag, read_tag_data, write_tag_data,
-        get_hardware_info, authenticate_tag, read_ndef_data, write_ndef_data,
-        continuous_poll, NFCError, NFCNoTagError
-    )
-    logger.info("Imported NFC module using package imports")
-except ImportError:
-    # If that fails, try direct import from current directory
-    sys.path.append(current_dir)
-    try:
-        from nfc_controller import (
-            initialize, shutdown, poll_for_tag, read_tag_data, write_tag_data,
-            get_hardware_info, authenticate_tag, read_ndef_data, write_ndef_data,
-            continuous_poll
-        )
-        from exceptions import NFCError, NFCNoTagError
-        logger.info("Imported NFC module using direct imports")
-    except ImportError as e:
-        logger.error(f"Failed to import NFC module: {e}")
-        print("ERROR: Failed to import the NFC module. Make sure:")
-        print("  1. You have installed the required dependencies (pip3 install -r requirements.txt)")
-        print("  2. You are running this script from the correct directory")
-        print("  3. The NFC module files are in the same directory as this script")
-        sys.exit(1)
+    import nfc_controller
+    import hardware_interface
+    import tag_processor
+    import exceptions
+    
+    # Now import the specific functions and classes we need
+    initialize = nfc_controller.initialize
+    shutdown = nfc_controller.shutdown
+    poll_for_tag = nfc_controller.poll_for_tag
+    read_tag_data = nfc_controller.read_tag_data
+    write_tag_data = nfc_controller.write_tag_data
+    get_hardware_info = nfc_controller.get_hardware_info
+    authenticate_tag = nfc_controller.authenticate_tag
+    read_ndef_data = nfc_controller.read_ndef_data
+    write_ndef_data = nfc_controller.write_ndef_data
+    continuous_poll = nfc_controller.continuous_poll
+    NFCError = exceptions.NFCError
+    NFCNoTagError = exceptions.NFCNoTagError
+    
+    logger.info("Successfully imported NFC module")
+except ImportError as e:
+    logger.error(f"Failed to import NFC module: {e}")
+    print("\n========== ERROR ==========")
+    print("Failed to import the NFC module components. Make sure:")
+    print("  1. You have installed the required dependencies:")
+    print("     sudo apt-get install python3-pip python3-smbus i2c-tools")
+    print("     sudo pip3 install smbus2")
+    print("  2. All module files are in the correct directory:")
+    print(f"     {current_dir}")
+    print("  3. You have proper permissions for I2C devices")
+    print("     (user should be in the i2c group)")
+    print("\nDetailed error:", str(e))
+    print("===========================\n")
+    sys.exit(1)
 
 def test_hardware_connection(i2c_bus=1, i2c_address=0x24):
     """Test connecting to the NFC hardware."""
