@@ -69,6 +69,132 @@ def shutdown():
     # but could add any cleanup needed here
     logger.info("Database connections closed")
 
+def add_or_get_media_by_url(url, tag_uid=None):
+    """
+    Look up or create media by URL, optionally associating it with a tag UID.
+
+    Args:
+        url (str): The URL of the media (typically a YouTube or YouTube Music URL)
+        tag_uid (str, optional): The UID of the NFC tag to associate with this URL
+
+    Returns:
+        dict or None: Media information if found or created, None if error occurs
+    """
+    try:
+        with DatabaseConnection(db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Look for existing media with this URL
+            cursor.execute(
+                "SELECT * FROM media WHERE url = ?",
+                (url,)
+            )
+            media_row = cursor.fetchone()
+            
+            current_time = int(time.time())
+            
+            if media_row:
+                # Media exists with this URL
+                media_dict = dict(media_row)
+                if media_dict.get('metadata'):
+                    media_dict['metadata'] = json_to_dict(media_dict['metadata'])
+                
+                # If tag_uid provided, associate this tag with the existing media
+                if tag_uid:
+                    # Check if tag exists
+                    cursor.execute("SELECT uid FROM tags WHERE uid = ?", (tag_uid,))
+                    tag_exists = cursor.fetchone() is not None
+                    
+                    if tag_exists:
+                        # Update existing tag
+                        cursor.execute(
+                            "UPDATE tags SET media_id = ?, last_used = ? WHERE uid = ?",
+                            (media_dict['id'], current_time, tag_uid)
+                        )
+                    else:
+                        # Create new tag
+                        cursor.execute(
+                            "INSERT INTO tags (uid, media_id, last_used, created_at) VALUES (?, ?, ?, ?)",
+                            (tag_uid, media_dict['id'], current_time, current_time)
+                        )
+                
+                return media_dict
+            else:
+                # Create new media entry with the URL
+                # Generate a unique ID for the new media
+                import uuid
+                media_id = str(uuid.uuid4())
+                
+                # Extract basic title from URL if possible
+                import os
+                from urllib.parse import urlparse, unquote
+                
+                # Try to extract a default title from the URL
+                parsed_url = urlparse(url)
+                path = unquote(parsed_url.path)
+                
+                # For YouTube URLs, use the video ID or last path segment
+                if 'youtube.com' in parsed_url.netloc or 'youtu.be' in parsed_url.netloc:
+                    if 'youtu.be' in parsed_url.netloc:
+                        # Short URL, video ID is the path
+                        title = f"YouTube Video: {path.strip('/')}"
+                    else:
+                        # Full URL, look for v parameter
+                        from urllib.parse import parse_qs
+                        query = parse_qs(parsed_url.query)
+                        if 'v' in query:
+                            title = f"YouTube Video: {query['v'][0]}"
+                        else:
+                            title = f"YouTube Media: {os.path.basename(path)}"
+                else:
+                    # For other URLs, use the last path segment or domain
+                    title = os.path.basename(path) if path and path != '/' else parsed_url.netloc
+                
+                # Insert the new media
+                cursor.execute("""
+                    INSERT INTO media (
+                        id, title, source, source_url, url, duration, 
+                        thumbnail_path, local_path, metadata, created_at, last_played
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    media_id, title, 'url', url, url, 0,
+                    '', '', dict_to_json({}),
+                    current_time, 0
+                ))
+                
+                # If tag_uid provided, create association
+                if tag_uid:
+                    # Check if tag exists
+                    cursor.execute("SELECT uid FROM tags WHERE uid = ?", (tag_uid,))
+                    tag_exists = cursor.fetchone() is not None
+                    
+                    if tag_exists:
+                        # Update existing tag
+                        cursor.execute(
+                            "UPDATE tags SET media_id = ?, last_used = ? WHERE uid = ?",
+                            (media_id, current_time, tag_uid)
+                        )
+                    else:
+                        # Create new tag
+                        cursor.execute(
+                            "INSERT INTO tags (uid, media_id, last_used, created_at) VALUES (?, ?, ?, ?)",
+                            (tag_uid, media_id, current_time, current_time)
+                        )
+                
+                # Return the newly created media info
+                cursor.execute("SELECT * FROM media WHERE id = ?", (media_id,))
+                new_media = cursor.fetchone()
+                if new_media:
+                    media_dict = dict(new_media)
+                    if media_dict.get('metadata'):
+                        media_dict['metadata'] = json_to_dict(media_dict['metadata'])
+                    return media_dict
+                
+                return None
+    except Exception as e:
+        logger.error(f"Error processing media by URL {url}: {str(e)}")
+        raise DatabaseQueryError(f"Failed to process media by URL: {str(e)}")
+
 def get_media_for_tag(tag_uid):
     """
     Look up the media associated with an NFC tag.
@@ -232,6 +358,7 @@ def save_media_info(media_id, info):
         title = info.get('title', '')
         source = info.get('source', '')
         source_url = info.get('source_url', '')
+        url = info.get('url', '')  # Added URL field
         duration = info.get('duration', 0)
         thumbnail_path = info.get('thumbnail_path', '')
         local_path = info.get('local_path', '')
@@ -251,11 +378,11 @@ def save_media_info(media_id, info):
                 # Update existing media
                 cursor.execute("""
                     UPDATE media 
-                    SET title = ?, source = ?, source_url = ?, duration = ?, 
+                    SET title = ?, source = ?, source_url = ?, url = ?, duration = ?, 
                         thumbnail_path = ?, local_path = ?, metadata = ?
                     WHERE id = ?
                 """, (
-                    title, source, source_url, duration,
+                    title, source, source_url, url, duration,
                     thumbnail_path, local_path, dict_to_json(metadata),
                     media_id
                 ))
@@ -263,11 +390,11 @@ def save_media_info(media_id, info):
                 # Insert new media
                 cursor.execute("""
                     INSERT INTO media (
-                        id, title, source, source_url, duration, 
+                        id, title, source, source_url, url, duration, 
                         thumbnail_path, local_path, metadata, created_at, last_played
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    media_id, title, source, source_url, duration,
+                    media_id, title, source, source_url, url, duration,
                     thumbnail_path, local_path, dict_to_json(metadata),
                     current_time, 0
                 ))

@@ -29,6 +29,7 @@ def create_tables(conn):
         title TEXT,
         source TEXT,
         source_url TEXT,
+        url TEXT UNIQUE,
         duration INTEGER,
         thumbnail_path TEXT,
         local_path TEXT,
@@ -64,6 +65,7 @@ def create_tables(conn):
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_playback_tag ON playback_history(tag_uid)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_playback_media ON playback_history(media_id)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_media_last_played ON media(last_played)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_media_url ON media(url)')
 
     conn.commit()
 

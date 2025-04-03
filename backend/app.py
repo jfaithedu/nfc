@@ -54,15 +54,31 @@ def main_loop():
     
     try:
         while True:
-            # Poll for NFC tag
-            tag_uid = nfc_controller.poll_for_tag()
+            # Poll for NFC tag - now returns (uid, ndef_info) tuple
+            tag_uid, ndef_info = nfc_controller.poll_for_tag()
+            
+            # Initialize media_info to None
+            media_info = None
             
             if tag_uid:
                 logger.info(f"Tag detected: {tag_uid}")
                 
-                # Look up tag in database
-                media_info = db_manager.get_media_for_tag(tag_uid)
+                # NDEF Handling - Check if ndef_info contains a valid URI
+                if ndef_info and ndef_info.get('type') == 'uri':
+                    url = ndef_info.get('uri')
+                    # Validate if the URI is a YouTube or YouTube Music URL
+                    if url and ('youtube.com' in url or 'youtu.be' in url or 'music.youtube.com' in url):
+                        logger.info(f"Found valid YouTube URL in NDEF data: {url}")
+                        # Add or get media by URL, possibly associating with this tag UID
+                        media_info = db_manager.add_or_get_media_by_url(url, tag_uid)
+                        logger.info(f"Media {'found' if media_info else 'could not be found/created'} for URL")
                 
+                # UID Handling (if no valid NDEF URL was found or processed)
+                if media_info is None:
+                    logger.info("No valid NDEF URL found, looking up by tag UID")
+                    media_info = db_manager.get_media_for_tag(tag_uid)
+                
+                # Playback
                 if media_info:
                     # Stop any currently playing media
                     audio_controller.stop()
@@ -71,7 +87,7 @@ def main_loop():
                     media_path = media_manager.prepare_media(media_info)
                     audio_controller.play(media_path)
                 else:
-                    logger.warning(f"Unknown tag: {tag_uid}")
+                    logger.warning(f"Unknown tag: UID={tag_uid}, NDEF={ndef_info}")
                     audio_controller.play_error_sound()
             
             # Small delay to prevent CPU overuse

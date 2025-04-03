@@ -54,7 +54,7 @@ def migrate_database(conn):
     """
     try:
         current_version = get_db_version(conn)
-        latest_version = 1  # Update this as new migrations are added
+        latest_version = 2  # Update this as new migrations are added
 
         if current_version >= latest_version:
             return False  # No migrations needed
@@ -62,6 +62,9 @@ def migrate_database(conn):
         # Apply migrations sequentially
         if current_version < 1:
             migrate_to_v1(conn)
+            
+        if current_version < 2:
+            migrate_to_v2(conn)
 
         # Add more version checks and migrations as needed
 
@@ -103,3 +106,33 @@ def migrate_to_v1(conn):
     except Exception as e:
         conn.rollback()
         raise DatabaseMigrationError(f"Failed to migrate to version 1: {str(e)}")
+
+def migrate_to_v2(conn):
+    """
+    Migrate database to version 2.
+    Adds URL column to media table and creates index for URL lookups.
+
+    Args:
+        conn: SQLite connection
+    """
+    cursor = conn.cursor()
+
+    try:
+        # Add the URL column to the media table
+        try:
+            cursor.execute("ALTER TABLE media ADD COLUMN url TEXT UNIQUE")
+        except sqlite3.OperationalError:
+            # Column might already exist
+            pass
+
+        # Create index for URL lookups
+        try:
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_media_url ON media(url)')
+        except sqlite3.OperationalError:
+            # Index might already exist
+            pass
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise DatabaseMigrationError(f"Failed to migrate to version 2: {str(e)}")

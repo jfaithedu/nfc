@@ -210,6 +210,7 @@ class MediaManager(LoggerMixin):
         Prepare media for playback based on media_info from database.
 
         Will download from YouTube if not cached or use cached version if available.
+        Prioritizes URL field if present (for NDEF URL handling).
 
         Args:
             media_info (dict): Media information containing source, URL, etc.
@@ -224,7 +225,6 @@ class MediaManager(LoggerMixin):
             raise MediaPreparationError("Invalid media info provided")
         
         media_id = media_info['id']
-        source_type = media_info.get('source_type', 'unknown')
         
         # Check if we have this media item in cache
         cached_path = self.cache.get_cached_path(media_id)
@@ -234,6 +234,18 @@ class MediaManager(LoggerMixin):
         
         # If not in cache, we need to fetch/prepare it
         try:
+            # First check if media_info has a url field (from NDEF tag)
+            if 'url' in media_info and media_info['url']:
+                url = media_info['url']
+                if ('youtube.com' in url or 'youtu.be' in url or 'music.youtube.com' in url):
+                    self.logger.info(f"Preparing media from URL field: {url}")
+                    # Create YouTube info with the URL
+                    youtube_info = media_info.copy()
+                    youtube_info['source_type'] = 'youtube'
+                    return self._prepare_youtube_media(youtube_info)
+            
+            # Fall back to traditional source_type based handling
+            source_type = media_info.get('source_type', 'unknown')
             if source_type == 'youtube':
                 return self._prepare_youtube_media(media_info)
             elif source_type == 'local':

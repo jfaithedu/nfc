@@ -15,7 +15,7 @@ from .db_manager import (
     remove_tag_association, get_all_tags,
     
     # Media management
-    save_media_info, get_media_info, 
+    add_or_get_media_by_url, save_media_info, get_media_info, 
     get_all_media, remove_media,
     
     # Playback history
