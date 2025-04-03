@@ -293,12 +293,6 @@ main() {
     # Check if running as root
     check_root
     
-    # Add repositories if needed
-    add_repositories
-    
-    # Install system dependencies
-    install_system_deps
-    
     # Configure BlueALSA
     configure_bluealsa
     
