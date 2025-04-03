@@ -15,7 +15,7 @@ fi
 # Install required system packages
 echo -e "\n[1/4] Installing required system packages..."
 sudo apt-get update
-sudo apt-get install -y python3-pip python3-smbus i2c-tools &&  echo "Packages installed successfully"
+sudo apt-get install -y python3-pip python3-smbus i2c-tools python3-venv python3-full &&  echo "Packages installed successfully"
 
 # Enable I2C if not already enabled
 echo -e "\n[2/4] Checking I2C configuration..."
@@ -40,15 +40,26 @@ else
   echo "i2c-dev module already loaded"
 fi
 
-# Install Python dependencies
-echo -e "\n[3/4] Installing Python dependencies..."
-if ! command -v pip3 &> /dev/null; then
-    echo "pip3 not found. Installing python3-pip..."
-    sudo apt-get install -y python3-pip
+# Setup virtual environment
+echo -e "\n[3/4] Setting up Python virtual environment..."
+# Get project root directory (assuming backend/modules/nfc is the current script location)
+PROJECT_ROOT=$(realpath "$(dirname "$0")/../../../")
+VENV_PATH="$PROJECT_ROOT/venv"
+
+# Create virtual environment if it doesn't exist
+if [ ! -d "$VENV_PATH" ]; then
+  echo "Creating virtual environment at $VENV_PATH"
+  python3 -m venv "$VENV_PATH"
+else
+  echo "Virtual environment already exists at $VENV_PATH"
 fi
 
-echo "Installing required Python packages..."
-sudo pip3 install -r $(dirname "$0")/requirements.txt
+# Activate virtual environment and install dependencies
+echo "Installing required Python packages in virtual environment..."
+source "$VENV_PATH/bin/activate"
+pip install --upgrade pip
+pip install -r "$(dirname "$0")/requirements.txt"
+echo "Python packages installed successfully in virtual environment"
 
 # Run I2C detection
 echo -e "\n[4/4] Detecting I2C devices..."
@@ -71,7 +82,7 @@ else
   echo -e "\nYou can now run the test script with:"
 fi
 
-echo "    $(dirname "$0")/test_nfc.py"
+echo "    source $VENV_PATH/bin/activate && $(dirname "$0")/test_nfc.py"
 echo
 echo "Options:"
 echo "    -b, --bus BUS        I2C bus number (default: 1)"
@@ -81,7 +92,7 @@ echo "    -d, --duration SEC   Duration for polling tests (default: 10)"
 echo "    -v, --verbose        Enable verbose logging"
 echo
 echo "Example:"
-echo "    $(dirname "$0")/test_nfc.py -t detect -d 5"
+echo "    source $VENV_PATH/bin/activate && $(dirname "$0")/test_nfc.py -t detect -d 5"
 echo
 echo "See test_nfc.py --help for more details"
 echo "============================================================="
