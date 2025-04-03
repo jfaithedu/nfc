@@ -475,10 +475,11 @@ def main() -> None:
         print("Goodbye!")
 
 
+# Import select for non-blocking input
+import select
+
 if __name__ == "__main__":
     try:
-        # Import select for non-blocking input
-        import select
         main()
     except KeyboardInterrupt:
         print("\nProgram interrupted by user.")
