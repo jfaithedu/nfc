@@ -3,11 +3,6 @@
 # For Bluetooth functionality
 pydbus>=0.6.0
 dbus-python>=1.2.16
-pygobject>=3.40.0
-
-# For audio playback
-gst-python>=1.0.0     # GStreamer Python bindings
-PyGObject>=3.40.0     # GStreamer uses GObject Introspection
 
 # For system operations
 pexpect>=4.8.0        # For running system commands
@@ -15,3 +10,7 @@ pexpect>=4.8.0        # For running system commands
 # For testing
 pytest>=6.2.5
 pytest-cov>=2.12.1
+
+# NOTE: The following dependencies are installed as system packages and shouldn't be installed via pip:
+# - pygobject (use system python3-gi package instead)
+# - gstreamer-python (use system python3-gst-1.0 package instead)

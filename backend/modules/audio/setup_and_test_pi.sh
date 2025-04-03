@@ -46,22 +46,13 @@ install_system_deps() {
         bluealsa \
         dbus \
         python3-dbus \
-        python3-gi
-    
-    # Install GStreamer dependencies
-    apt-get install -y --no-install-recommends \
+        python3-gi \
         gstreamer1.0-tools \
         gstreamer1.0-plugins-base \
         gstreamer1.0-plugins-good \
         gstreamer1.0-alsa \
-        python3-gst-1.0
-    
-    # Install audio utilities
-    apt-get install -y --no-install-recommends \
-        alsa-utils
-    
-    # Install Python development tools
-    apt-get install -y --no-install-recommends \
+        python3-gst-1.0 \
+        alsa-utils \
         python3-pip \
         python3-dev \
         python3-setuptools \
