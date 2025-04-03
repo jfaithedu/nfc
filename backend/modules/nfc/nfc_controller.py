@@ -496,6 +496,175 @@ def write_ndef_data(url=None, text=None):
             # Raise a generic NFCWriteError for unexpected issues
             raise NFCWriteError(f"Unexpected error writing NDEF data: {str(e)}")
 
+# --- End Restored NDEF Functions ---
+
+# --- Restored NDEF Functions ---
+
+def read_ndef_data():
+    """
+    Read and parse NDEF formatted data from tag.
+    
+    Returns:
+        dict: Parsed NDEF message and records, or None if no valid NDEF data found.
+        
+    Raises:
+        NFCReadError: If reading fails critically.
+        NFCNoTagError: If no tag is present.
+        NFCHardwareError: If the controller is not initialized.
+    """
+    global _nfc_reader
+    with _reader_lock:
+        if not _nfc_reader:
+            error_msg = "NFC controller not initialized"
+            logger.error(error_msg)
+            raise NFCHardwareError(error_msg)
+
+        try:
+            # NDEF data typically starts at block 4, but may span multiple blocks
+            # Read first block to determine TLV length
+            data = read_tag_data(4) # Use the existing read_tag_data which reads one block
+            
+            # Check for TLV structure to determine total length
+            if len(data) >= 2 and data[0] == 0x03:  # NDEF Message TLV
+                start_offset = 2
+                if data[1] == 0xFF and len(data) >= 4: # 3-byte length format
+                    tlv_length = int.from_bytes(data[2:4], byteorder='big')
+                    start_offset = 4
+                else: # 1-byte length format
+                    tlv_length = data[1]
+
+                total_bytes_needed = tlv_length + start_offset
+                
+                # If data spans multiple blocks, read additional blocks
+                if total_bytes_needed > 16:
+                    num_blocks_to_read = (total_bytes_needed + 15) // 16 # Total blocks needed
+                    # Read additional blocks and append data
+                    for i in range(1, num_blocks_to_read):
+                        block_num = 4 + i
+                        try:
+                            additional_data = read_tag_data(block_num)
+                            data += additional_data
+                        except NFCReadError as block_e:
+                            logger.warning(f"Could not read additional NDEF block {block_num}: {str(block_e)}")
+                            # Return partial data if possible, or None if critical read failed
+                            break # Stop reading further blocks
+                        except NFCNoTagError:
+                            logger.warning(f"Tag removed while reading NDEF block {block_num}")
+                            raise # Propagate NoTagError
+                        except Exception as block_e:
+                             logger.error(f"Unexpected error reading NDEF block {block_num}: {str(block_e)}")
+                             break # Stop reading further blocks
+
+                    logger.debug(f"Read {len(data)} bytes of NDEF data across {num_blocks_to_read} blocks")
+            
+            # Parse NDEF data using the function from tag_processor
+            ndef_info = parse_ndef_data(data)
+            if not ndef_info:
+                logger.info("No valid NDEF data found on tag after reading blocks.")
+                return None
+                
+            logger.info("Successfully read and parsed NDEF data.")
+            return ndef_info # Return the full parsed dictionary
+
+        except NFCNoTagError:
+            logger.debug("No tag present while attempting to read NDEF data.")
+            raise # Re-raise to be handled by caller
+        except NFCReadError as e:
+            logger.warning(f"NFC Read Error while reading NDEF data: {str(e)}")
+            raise # Re-raise critical read errors
+        except Exception as e:
+            logger.error(f"Unexpected error reading NDEF data: {str(e)}")
+            # Raise a generic NFCReadError for unexpected issues during NDEF read
+            raise NFCReadError(f"Unexpected error reading NDEF data: {str(e)}")
+
+
+def write_ndef_data(url=None, text=None):
+    """
+    Write NDEF formatted data (URI or Text) to the currently present tag.
+    
+    Args:
+        url (str, optional): URL to encode.
+        text (str, optional): Text to encode. Only one of url or text should be provided.
+        
+    Returns:
+        bool: True if write successful.
+        
+    Raises:
+        NFCNoTagError: If no tag is present during the operation.
+        NFCTagNotWritableError: If the tag is read-only or cannot be written to.
+        NFCWriteError: For other write-related failures.
+        NFCHardwareError: If the controller is not initialized.
+        ValueError: If neither url nor text is provided.
+    """
+    global _nfc_reader
+    with _reader_lock:
+        if not _nfc_reader:
+            error_msg = "NFC controller not initialized"
+            logger.error(error_msg)
+            raise NFCHardwareError(error_msg)
+
+        # Ensure a tag is present before attempting to write
+        if not _nfc_reader._last_tag_uid:
+             # Try polling once more to be sure
+            if not poll_for_tag(): # Check only UID part of the tuple
+                raise NFCNoTagError("No NFC tag detected to write NDEF data to")
+
+        if not url and not text:
+             raise ValueError("Either url or text must be provided to write_ndef_data")
+        if url and text:
+             logger.warning("Both url and text provided to write_ndef_data, using url.")
+             text = None # Prioritize URL if both given
+
+        log_target = f"URI '{url}'" if url else f"Text '{text[:20]}...'"
+        logger.info(f"Attempting to write NDEF {log_target}")
+
+        try:
+            # Create NDEF formatted data (including TLV and padding)
+            ndef_data_bytes = create_ndef_data(url=url, text=text)
+            logger.debug(f"Generated NDEF data ({len(ndef_data_bytes)} bytes): {ndef_data_bytes.hex()}")
+
+            # Check if tag is writable *before* attempting write
+            if _nfc_reader.is_tag_read_only():
+                 logger.error("Tag is read-only or write-protected. Cannot write NDEF data.")
+                 raise NFCTagNotWritableError("Tag is read-only or write-protected")
+
+            # Write data to tag starting at block 4
+            num_blocks = (len(ndef_data_bytes) + 15) // 16
+            logger.info(f"Writing {len(ndef_data_bytes)} bytes ({num_blocks} blocks) starting at block 4...")
+
+            for i in range(num_blocks):
+                start_index = i * 16
+                end_index = start_index + 16
+                block_data = ndef_data_bytes[start_index:end_index]
+                block_num = 4 + i
+
+                # Pad the last block if necessary (should already be padded by create_ndef_data)
+                if len(block_data) < 16:
+                    block_data = block_data.ljust(16, b'\x00')
+
+                logger.debug(f"Writing block {block_num} with data: {block_data.hex()}")
+                # Use write_tag_data with verify=True by default
+                if not write_tag_data(block_data, block_num, verify=True):
+                    logger.error(f"write_tag_data returned False for block {block_num}, expected exception on failure.")
+                    raise NFCWriteError(f"Failed to write block {block_num} during NDEF write operation")
+
+            logger.info(f"Successfully wrote NDEF data to tag.")
+            return True
+
+        except NFCNoTagError:
+            logger.error("Tag removed during NDEF write operation.")
+            raise # Re-raise
+        except NFCTagNotWritableError as e:
+             logger.error(f"Cannot write NDEF data: {str(e)}")
+             raise # Re-raise specific error
+        except NFCWriteError as e:
+            logger.error(f"Failed to write NDEF data: {str(e)}")
+            raise # Re-raise write errors
+        except Exception as e:
+            logger.error(f"Unexpected error writing NDEF data: {str(e)}")
+            # Raise a generic NFCWriteError for unexpected issues
+            raise NFCWriteError(f"Unexpected error writing NDEF data: {str(e)}")
+
 # --- Restored NDEF Functions ---
 
 def read_ndef_data():
