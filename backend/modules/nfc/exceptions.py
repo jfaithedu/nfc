@@ -25,7 +25,3 @@ class NFCWriteError(NFCError):
 class NFCAuthenticationError(NFCError):
     """Exception raised when tag authentication fails."""
     pass
-
-class NFCTagNotWritableError(NFCWriteError):
-    """Exception raised when attempting to write NDEF data to a non-writable or incorrectly formatted tag."""
-    pass

@@ -42,12 +42,8 @@ Create a durable, toddler-safe music player powered by a Raspberry Pi Zero 2 W, 
 ### 1. **NFC Interaction**
 
 - Poll for NFC tags using I2C.
-- Read tag UID and/or NDEF data.
-- **NDEF Handling:** If an NDEF record containing a YouTube or YouTube Music URL is found:
-  - Check if the URL is already associated with a tag in the database.
-  - If not, automatically add the URL to the database, potentially associating it with the tag's UID if available.
-- **UID Handling:** If a UID is read, check for a match in the SQLite DB.
-- Trigger associated audio/media playback based on the found UID or the newly added NDEF URL.
+- Retrieve tag UID and check for match in SQLite DB.
+- Trigger associated audio/media playback on match.
 
 ### 2. **Audio Playback**
 
@@ -58,9 +54,9 @@ Create a durable, toddler-safe music player powered by a Raspberry Pi Zero 2 W, 
 
 - Web-based admin interface:
   - Assign/edit NFC tag to YouTube link or local audio file
-- Write tag metadata (including NDEF URLs for YouTube/Music)
-- Upload local files
-- Test playback
+  - Write tag metadata
+  - Upload local files
+  - Test playback
 - Local-only (optional login pin for safety)
 
 ### 4. **Media Management**
@@ -83,7 +79,7 @@ Create a durable, toddler-safe music player powered by a Raspberry Pi Zero 2 W, 
 
 - Fail gracefully: unrecognized tags should not crash the system
 - Only pre-approved YouTube links or downloaded media may be played
-- NFC tags must be editable only via the admin interface (writing UIDs or NDEF URLs)
+- NFC tags must be editable only via the admin interface
 
 ### **Security Guidelines**
 
@@ -103,7 +99,7 @@ Create a durable, toddler-safe music player powered by a Raspberry Pi Zero 2 W, 
 - Tag management view
 - Playback test mode
 - Backup/restore feature for database and tags
-- NFC writer utility (for assigning UIDs and writing NDEF URLs)
+- NFC writer utility
 
 ---
 
@@ -111,6 +107,6 @@ Create a durable, toddler-safe music player powered by a Raspberry Pi Zero 2 W, 
 
 - Add physical buttons (play/pause/volume)
 - Integrate voice feedback or instructions for the child
-- NFC tag writer using the web interface (supporting NDEF URL writing)
+- NFC tag writer using the web interface
 - Offline local music folder scanner
 - Daily/weekly usage statistics for parents

@@ -25,10 +25,9 @@ See `requirements.txt` for specific version requirements.
 
 1. Initialize and configure the NFC reader hardware
 2. Continuously poll for NFC tag presence
-3. Read tag UID and/or NDEF data (specifically URI records for YouTube/Music) when detected
-4. Write NDEF data (specifically URI records) to compatible tags
-5. Provide clean, error-handled interfaces to other system components
-6. Support diagnostic and testing capabilities
+3. Read tag UID when detected
+4. Provide clean, error-handled interfaces to other system components
+5. Support diagnostic and testing capabilities
 
 ## Implementation Details
 
@@ -68,7 +67,7 @@ def poll_for_tag():
     Check for presence of an NFC tag.
 
     Returns:
-        tuple(str, dict) or (None, None): Tuple containing (Tag UID, Parsed NDEF Data) if detected, (None, None) otherwise. NDEF Data might be None if only UID is read or no NDEF message is present.
+        str or None: Tag UID if detected, None otherwise
     """
 
 def read_tag_data(block=4):
@@ -86,39 +85,9 @@ def read_tag_data(block=4):
         NFCNoTagError: If no tag is present
     """
 
-def read_ndef_data():
-    """
-    Attempt to read and parse NDEF data from the currently present tag.
-
-    Returns:
-        dict or None: Parsed NDEF message and records, or None if no NDEF data found or parsing fails.
-
-    Raises:
-        NFCReadError: If reading fails
-        NFCNoTagError: If no tag is present
-    """
-
-def write_ndef_uri(uri):
-    """
-    Write an NDEF URI record to the currently present tag.
-
-    Args:
-        uri (str): The URI (e.g., YouTube URL) to write.
-
-    Returns:
-        bool: True if write successful
-
-    Raises:
-        NFCWriteError: If writing fails
-        NFCNoTagError: If no tag is present
-        NFCTagNotWritableError: If the tag is not NDEF writable or formatted.
-    """
-
-# Optional: Keep block-level write for low-level operations if needed,
-# but prioritize NDEF writing for standard use cases.
 def write_tag_data(data, block=4):
     """
-    (Low-level) Write raw data to a specific block on the currently present tag.
+    Write data to a specific block on the currently present tag.
 
     Args:
         data (bytes): Data to write (must be 16 bytes or less)
@@ -239,9 +208,9 @@ def format_uid(raw_uid):
         str: Formatted UID string (hex format, uppercase)
     """
 
-def parse_ndef_message(data):
+def parse_ndef_data(data):
     """
-    Parse a raw NDEF message read from a tag.
+    Parse NDEF formatted data from tag.
 
     Args:
         data (bytes): Raw data read from tag
@@ -250,15 +219,16 @@ def parse_ndef_message(data):
         dict: Parsed NDEF message and records
     """
 
-def create_ndef_uri_message(uri):
+def create_ndef_data(url=None, text=None):
     """
-    Create an NDEF message containing a URI record.
+    Create NDEF formatted data for writing to tag.
 
     Args:
-        uri (str): The URI (e.g., YouTube URL) to encode.
+        url (str, optional): URL to encode
+        text (str, optional): Text to encode
 
     Returns:
-        bytes: NDEF message bytes ready for writing to a tag.
+        bytes: NDEF formatted data ready for writing
     """
 ```
 
@@ -285,10 +255,6 @@ class NFCReadError(NFCError):
 
 class NFCWriteError(NFCError):
     """Exception raised when tag writing fails."""
-    pass
-
-class NFCTagNotWritableError(NFCWriteError):
-    """Exception raised when attempting to write to a non-writable or incorrectly formatted tag."""
     pass
 
 class NFCAuthenticationError(NFCError):
@@ -417,8 +383,6 @@ For an I2C-based NFC reader, follow these guidelines:
 
    - ISO/IEC 14443 (RFID proximity cards)
    - MIFARE Classic specification
-   - NFC Forum Type 2 Tag (Common for NDEF on NTAG series)
-   - NFC Data Exchange Format (NDEF) Specification
 
 3. **Sample Code and Libraries**:
    - [libnfc](http://nfc-tools.org/index.php/Libnfc)
