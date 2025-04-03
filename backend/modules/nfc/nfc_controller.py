@@ -336,8 +336,30 @@ def read_ndef_data():
         NFCNoTagError: If no tag is present
     """
     try:
-        # NDEF data typically starts at block 4
+        # NDEF data typically starts at block 4, but may span multiple blocks
+        # Read first block to determine TLV length
         data = read_tag_data(4)
+        
+        # Check for TLV structure to determine total length
+        if len(data) >= 2 and data[0] == 0x03:  # NDEF Message TLV
+            tlv_length = data[1]
+            total_bytes_needed = tlv_length + 2  # TLV type + length bytes + payload
+            
+            # If data spans multiple blocks, read additional blocks
+            if total_bytes_needed > 16:
+                # Calculate how many additional blocks we need
+                additional_blocks = (total_bytes_needed - 16 + 15) // 16  # Ceiling division
+                
+                # Read additional blocks and append data
+                for i in range(1, additional_blocks + 1):
+                    try:
+                        additional_data = read_tag_data(4 + i)
+                        data += additional_data
+                    except Exception as block_e:
+                        logger.warning(f"Could not read additional NDEF block {4+i}: {str(block_e)}")
+                        break
+                        
+                logger.debug(f"Read {len(data)} bytes of NDEF data across {additional_blocks + 1} blocks")
         
         # Parse NDEF data
         ndef_data = parse_ndef_data(data)

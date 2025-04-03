@@ -416,16 +416,42 @@ def test_ndef_data(i2c_bus=1, i2c_address=0x24):
             
             # Check if our URL is in there
             found_url = False
-            for record in read_ndef.get('records', []):
-                if 'decoded' in record and record['decoded'].get('type') == 'uri':
-                    if record['decoded'].get('uri') == url:
-                        found_url = True
-                        break
+            
+            # Show detailed record info for debugging
+            print("\nDetailed NDEF record contents:")
+            for i, record in enumerate(read_ndef.get('records', [])):
+                print(f"Record {i+1}:")
+                print(f"  Type Name Format: {record.get('type_name_format')}")
+                print(f"  Type: {record.get('type')}")
+                
+                if 'decoded' in record:
+                    print(f"  Decoded: {record['decoded']}")
+                    
+                    if record['decoded'].get('type') == 'uri':
+                        print(f"  → URI: {record['decoded'].get('uri')}")
+                        if record['decoded'].get('uri') == url:
+                            found_url = True
+                            print("    ✅ Matches expected URL!")
+                else:
+                    print(f"  Raw payload: {record.get('payload', b'').hex()}")
             
             if found_url:
-                print("✅ Successfully verified NDEF URL data!")
+                print("\n✅ Successfully verified NDEF URL data!")
             else:
-                print("❌ Could not verify NDEF URL data")
+                print("\n❌ Could not verify NDEF URL data")
+                print(f"Expected URL: {url}")
+                
+                # Show raw data for deeper debugging
+                print(f"\nRaw NDEF data from tag (first 64 bytes, hex):")
+                raw_data = read_tag_data(4)  # Read first block of NDEF data
+                print(f"Block 4: {raw_data.hex()}")
+                
+                # Try to read additional blocks
+                try:
+                    raw_data2 = read_tag_data(5)
+                    print(f"Block 5: {raw_data2.hex()}")
+                except Exception as e:
+                    print(f"Could not read Block 5: {str(e)}")
         except Exception as e:
             print(f"❌ Error during NDEF URL test: {str(e)}")
         

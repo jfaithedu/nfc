@@ -116,15 +116,26 @@ def parse_ndef_data(data):
         if data[0] == 0x03:  # Type 2 Tag, NDEF Message TLV
             # Parse TLV structure
             tlv_type = data[0]
-            tlv_length = data[1]
+            
+            # Check for 3-byte length format
+            if len(data) > 1 and data[1] == 0xFF and len(data) >= 4:
+                # 3-byte length format
+                tlv_length = int.from_bytes(data[2:4], byteorder='big')
+                start_offset = 4  # After the 3-byte length field
+                logger.debug(f"Found TLV with 3-byte length format: {tlv_length} bytes")
+            else:
+                # Standard 1-byte length format
+                tlv_length = data[1]
+                start_offset = 2  # After the 1-byte length field
             
             # If we find a valid NDEF TLV block
-            if tlv_type == 0x03 and tlv_length > 0 and len(data) >= tlv_length + 2:
+            if tlv_type == 0x03 and tlv_length > 0 and len(data) >= tlv_length + start_offset:
                 # Extract the NDEF message from the TLV
-                ndef_data = data[2:2+tlv_length]
+                ndef_data = data[start_offset:start_offset+tlv_length]
                 
                 # Now process the NDEF message
                 data = ndef_data
+                logger.debug(f"Extracted {len(ndef_data)} bytes of NDEF data from TLV")
             
         # Check for NTAG215 common format where the first byte is the NDEF message length
         elif len(data) > 2 and data[0] > 0 and data[0] < len(data) and data[1] in [0x01, 0x03, 0xD1]:
@@ -314,15 +325,28 @@ def create_ndef_data(url=None, text=None):
             if not text:  # If this is the only/last record
                 header |= 0x40  # Message End
             
-            header |= 0x10  # Short Record (payload less than 256 bytes)
+            # Short Record flag for payloads < 256 bytes
+            if len(payload) < 256:
+                header |= 0x10  # Short Record
+            
             header |= NDEF_TNF_WELL_KNOWN  # Well-known type
             
             type_field = NDEF_RTD_URI
             type_length = len(type_field)
             payload_length = len(payload)
             
-            record = bytes([header, type_length, payload_length]) + type_field + payload
+            # Create record header
+            if header & 0x10:  # Short Record
+                record = bytes([header, type_length, payload_length])
+            else:
+                # Long record format with 4-byte length
+                record = bytes([header, type_length]) + payload_length.to_bytes(4, byteorder='big')
+            
+            # Add type and payload
+            record += type_field + payload
             records.append(record)
+            
+            logger.debug(f"Created URI record with {len(payload)} bytes of payload data")
             
         except Exception as e:
             logger.error(f"Error creating URI record: {str(e)}")
@@ -364,10 +388,19 @@ def create_ndef_data(url=None, text=None):
     # For NTAG215, we need to create proper Type 2 Tag structure with TLV format
     # This is a simple Type 2 Tag TLV structure used by NTAG215
     tlv_type = bytes([0x03])  # NDEF Message TLV
-    tlv_length = bytes([len(ndef_message)])  # Length of the NDEF message
     
-    # Combine into TLV format
-    tlv_data = tlv_type + tlv_length + ndef_message
+    # Handle TLV length properly - for lengths > 254, we need to use a 3-byte format
+    message_length = len(ndef_message)
+    
+    if message_length < 255:
+        # Standard 1-byte length format
+        tlv_length = bytes([message_length])
+        tlv_data = tlv_type + tlv_length + ndef_message
+    else:
+        # 3-byte length format for lengths >= 255
+        tlv_length = bytes([0xFF]) + message_length.to_bytes(2, byteorder='big')
+        tlv_data = tlv_type + tlv_length + ndef_message
+        logger.debug(f"Using 3-byte TLV length format for message length {message_length}")
     
     # Add a terminator TLV if needed
     if len(tlv_data) < 16:  # If there's room in the first block
