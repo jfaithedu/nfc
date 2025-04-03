@@ -1,98 +1,49 @@
 """
-Audio module for the NFC music player.
+Audio module for the NFC-based music player.
 
-This module provides functionality for Bluetooth audio connections and playback.
+This module provides audio playback functionality, Bluetooth device management,
+and system sound capabilities.
 """
 
+from . import audio_controller
+from . import bluetooth_manager
+from . import playback_handler
+from . import system_sounds
+from . import exceptions
+
+# Export the public API
 from .audio_controller import (
-    # Core functionality
     initialize,
     shutdown,
-    
-    # Playback control
     play,
     pause,
     resume,
     stop,
     seek,
-    
-    # Volume control
     set_volume,
     get_volume,
     mute,
     unmute,
-    
-    # Status
     get_playback_status,
-    
-    # System sounds
+    is_playing,
     play_system_sound,
     play_error_sound,
     play_success_sound,
     
-    # Bluetooth management
-    start_bluetooth_discovery,
-    stop_bluetooth_discovery,
-    get_discovered_bluetooth_devices,
-    connect_bluetooth_device,
-    disconnect_bluetooth_device,
-    get_connected_bluetooth_device,
-    get_saved_bluetooth_devices
+    # Bluetooth functions
+    start_discovery,
+    stop_discovery,
+    get_discovered_devices,
+    connect_device,
+    disconnect_device,
+    forget_device,
+    get_connected_device,
+    is_device_connected,
+    get_paired_devices,
+    reconnect_last_device,
+    set_auto_reconnect,
+    get_bluetooth_status,
+    
+    # Testing
+    test_audio_output
 )
-
-from .exceptions import (
-    AudioError,
-    AudioInitializationError,
-    BluetoothError,
-    BluetoothDiscoveryError,
-    BluetoothConnectionError,
-    AudioPlaybackError,
-    MediaLoadError,
-    SystemSoundError
-)
-
-__all__ = [
-    # Core functionality
-    'initialize',
-    'shutdown',
-    
-    # Playback control
-    'play',
-    'pause',
-    'resume',
-    'stop',
-    'seek',
-    
-    # Volume control
-    'set_volume',
-    'get_volume',
-    'mute',
-    'unmute',
-    
-    # Status
-    'get_playback_status',
-    
-    # System sounds
-    'play_system_sound',
-    'play_error_sound',
-    'play_success_sound',
-    
-    # Bluetooth management
-    'start_bluetooth_discovery',
-    'stop_bluetooth_discovery',
-    'get_discovered_bluetooth_devices',
-    'connect_bluetooth_device',
-    'disconnect_bluetooth_device',
-    'get_connected_bluetooth_device',
-    'get_saved_bluetooth_devices',
-    
-    # Exceptions
-    'AudioError',
-    'AudioInitializationError',
-    'BluetoothError',
-    'BluetoothDiscoveryError',
-    'BluetoothConnectionError',
-    'AudioPlaybackError',
-    'MediaLoadError',
-    'SystemSoundError'
-]

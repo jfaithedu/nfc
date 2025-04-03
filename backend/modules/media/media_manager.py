@@ -1,739 +1,754 @@
 """
-media_manager.py - Main controller module for media management in the NFC music player.
+NFC-Based Toddler-Friendly Music Player - Media Manager
 
-This module serves as the main interface for other modules to interact with media functionality.
-It integrates YouTube handling, cache management, and metadata processing.
+Main media module controller that handles media preparation, caching, and metadata.
+Provides interfaces for other system components to access media functionality.
 """
 
 import os
+import json
+import logging
 import uuid
 import time
-import json
-from typing import Dict, List, Optional, Tuple, Union, Callable
+import shutil
+import threading
+import subprocess
+from pathlib import Path
+import yt_dlp
 
-from backend.utils.logger import LoggerMixin
-from backend.utils.file_utils import (
-    ensure_dir, 
-    file_size, 
-    is_media_file, 
-    get_file_extension,
-    copy_file_safe
-)
-from backend.config import CONFIG
-
-from .youtube_handler import YouTubeDownloader
-from .cache_manager import MediaCache
-from . import metadata_processor
 from .exceptions import (
-    MediaError, 
-    MediaPreparationError,
-    InvalidURLError, 
-    DownloadError,
-    UnsupportedFormatError
+    MediaError, MediaPreparationError, DownloadError, InvalidURLError,
+    UnsupportedFormatError, CacheError, YouTubeError, YouTubeInfoError, 
+    YouTubeDownloadError
 )
 
+from ..database import db_manager
+from ...config import CONFIG
 
-class MediaManager(LoggerMixin):
+# Set up logger
+logger = logging.getLogger(__name__)
+
+# Global variables
+_initialized = False
+_cache_dir = None
+_download_queue = []
+_queue_lock = threading.Lock()
+_download_thread = None
+_stop_downloads = False
+
+# Constants
+DEFAULT_CACHE_DIR = os.path.expanduser("~/.nfc_player/media_cache")
+MAX_CACHE_SIZE_MB = 1000  # 1GB default
+ALLOWED_FORMATS = ["mp3", "mp4", "m4a", "wav", "ogg"]
+
+# Initialize yt-dlp options
+YT_DLP_OPTIONS = {
+    'format': 'bestaudio/best',
+    'postprocessors': [{
+        'key': 'FFmpegExtractAudio',
+        'preferredcodec': 'mp3',
+        'preferredquality': '192',
+    }],
+    'quiet': True,
+    'no_warnings': True,
+    'noplaylist': True, 
+    'geo_bypass': True,
+    'nocheckcertificate': True
+}
+
+def initialize():
     """
-    Main controller for media functionality.
+    Initialize the media manager.
+
+    Returns:
+        bool: True if initialization successful
     """
+    global _initialized, _cache_dir
     
-    def __init__(self, config=None):
-        """
-        Initialize the media manager.
+    try:
+        logger.info("Initializing media manager")
         
-        Args:
-            config (dict, optional): Configuration, defaults to global CONFIG
-        """
-        self.setup_logger()
+        # Get configuration
+        _cache_dir = CONFIG.get('media', {}).get('cache_dir', DEFAULT_CACHE_DIR)
         
-        # Use global config if not provided
-        self.config = config or CONFIG.get('media', {})
+        # Create cache directory if it doesn't exist
+        os.makedirs(_cache_dir, exist_ok=True)
         
-        # Ensure media directories exist
-        self.cache_dir = ensure_dir(self.config.get('cache_dir', 'data/media_cache'))
-        self.thumbnails_dir = ensure_dir(os.path.join(self.cache_dir, 'thumbnails'))
+        # Start background download thread
+        _start_download_thread()
         
-        # Allowed media formats
-        self.allowed_formats = self.config.get('allowed_formats', ['mp3', 'wav', 'ogg', 'm4a'])
+        _initialized = True
+        logger.info("Media manager initialized successfully")
+        return True
         
-        # Maximum cache size in MB
-        self.max_cache_size_mb = self.config.get('max_cache_size_mb', 1000)
-        
-        # Initialize components
-        self.youtube_downloader = YouTubeDownloader(
-            output_dir=self.cache_dir,
-            yt_dlp_options=self.config.get('yt_dlp_options', None)
-        )
-        
-        self.cache = MediaCache(
-            cache_dir=self.cache_dir,
-            max_size_mb=self.max_cache_size_mb
-        )
-        
-        # Media library file to track media items
-        self.library_file = os.path.join(self.cache_dir, 'media_library.json')
-        self.library = self._load_library()
-        
-        self.logger.info("Media manager initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize media manager: {str(e)}")
+        return False
+
+def shutdown():
+    """
+    Perform cleanup operations before shutdown.
+    """
+    global _initialized, _stop_downloads, _download_thread
     
-    def _load_library(self) -> Dict:
-        """
-        Load the media library from file.
+    logger.info("Shutting down media manager")
+    
+    # Stop download thread
+    if _download_thread and _download_thread.is_alive():
+        _stop_downloads = True
+        _download_thread.join(timeout=3)
+    
+    _initialized = False
+    logger.info("Media manager shut down")
+
+def is_initialized():
+    """
+    Check if the media manager is initialized.
+    
+    Returns:
+        bool: True if initialized
+    """
+    return _initialized
+
+def prepare_media(media_info):
+    """
+    Prepare media for playback based on media_info from database.
+
+    Will download from YouTube if not cached or use cached version if available.
+
+    Args:
+        media_info (dict): Media information containing source, URL, etc.
+
+    Returns:
+        str: Path to media file ready for playback
+
+    Raises:
+        MediaPreparationError: If media cannot be prepared
+    """
+    _check_initialized()
+    
+    if not media_info:
+        raise MediaPreparationError("No media information provided")
+    
+    media_id = media_info.get('id')
+    if not media_id:
+        raise MediaPreparationError("Media ID is required")
+    
+    try:
+        # Check if we have full media info
+        if isinstance(media_info, dict) and len(media_info) <= 2:  # Only has id and maybe one other field
+            # Get full media info from database
+            media_info = db_manager.get_media_info(media_id)
+            if not media_info:
+                raise MediaPreparationError(f"Media with ID {media_id} not found in database")
         
-        Returns:
-            dict: The media library data
-        """
-        if os.path.exists(self.library_file):
+        # Check if we have a local path already
+        local_path = media_info.get('local_path')
+        if local_path and os.path.exists(local_path):
+            logger.debug(f"Using existing local file for media {media_id}: {local_path}")
+            
+            # Update last_played in database
             try:
-                with open(self.library_file, 'r') as f:
-                    library = json.load(f)
-                self.logger.info(f"Loaded media library with {len(library.get('items', {}))} items")
-                return library
+                current_time = int(time.time())
+                db_manager.save_media_info(media_id, {'last_played': current_time})
             except Exception as e:
-                self.logger.error(f"Failed to load media library: {e}")
-                # Fall back to creating a new library
-        
-        # Create new library structure
-        library = {
-            'version': 1,
-            'created': time.time(),
-            'last_modified': time.time(),
-            'items': {}
-        }
-        
-        # Save the new library
-        self._save_library(library)
-        
-        return library
-    
-    def _save_library(self, library=None) -> bool:
-        """
-        Save the media library to file.
-        
-        Args:
-            library (dict, optional): Library to save, defaults to self.library
+                logger.warning(f"Failed to update last_played time: {str(e)}")
             
-        Returns:
-            bool: True if successful
-        """
-        library = library or self.library
+            return local_path
         
-        try:
-            # Update last modified timestamp
-            library['last_modified'] = time.time()
+        # Check if media is in cache
+        cache_path = _get_cached_path(media_id)
+        if cache_path:
+            logger.debug(f"Using cached file for media {media_id}: {cache_path}")
             
-            with open(self.library_file, 'w') as f:
-                json.dump(library, f, indent=2)
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to save media library: {e}")
-            return False
-    
-    def initialize(self) -> bool:
-        """
-        Initialize the media manager.
-
-        Returns:
-            bool: True if initialization successful
-        """
-        try:
-            # Make sure all required directories exist
-            ensure_dir(self.cache_dir)
-            ensure_dir(self.thumbnails_dir)
-            
-            # Check library file
-            if not os.path.exists(self.library_file):
-                self._save_library()
-            
-            # Optimize cache if needed
-            if self.cache.get_cache_size() > self.max_cache_size_mb * 1024 * 1024:
-                self.cache.optimize_cache()
-            
-            # Validate library entries (ensure files exist)
-            self._validate_library()
-            
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to initialize media manager: {e}")
-            return False
-    
-    def _validate_library(self) -> None:
-        """
-        Validate all entries in the library, removing invalid ones.
-        """
-        invalid_ids = []
-        
-        for media_id, info in self.library.get('items', {}).items():
-            # Check if file exists in cache
-            cache_path = self.cache.get_cached_path(media_id)
-            if not cache_path:
-                invalid_ids.append(media_id)
-                continue
-            
-            # Check if file is a valid media file
-            if not os.path.exists(cache_path) or not is_media_file(cache_path, self.allowed_formats):
-                invalid_ids.append(media_id)
-        
-        # Remove invalid entries
-        for media_id in invalid_ids:
-            self.logger.warning(f"Removing invalid library entry: {media_id}")
-            self.library['items'].pop(media_id, None)
-        
-        # Save changes
-        if invalid_ids:
-            self._save_library()
-            self.logger.info(f"Removed {len(invalid_ids)} invalid library entries")
-    
-    def shutdown(self) -> None:
-        """
-        Perform cleanup operations before shutdown.
-        """
-        # Save library
-        self._save_library()
-        
-        # Clean up any temporary files
-        self.logger.info("Media manager shutdown complete")
-    
-    def _generate_media_id(self) -> str:
-        """
-        Generate a unique media ID.
-        
-        Returns:
-            str: Unique media ID
-        """
-        # Generate a UUID and remove hyphens
-        return uuid.uuid4().hex
-    
-    def prepare_media(self, media_info: Dict) -> str:
-        """
-        Prepare media for playback based on media_info from database.
-
-        Will download from YouTube if not cached or use cached version if available.
-        Prioritizes URL field if present (for NDEF URL handling).
-
-        Args:
-            media_info (dict): Media information containing source, URL, etc.
-
-        Returns:
-            str: Path to media file ready for playback
-
-        Raises:
-            MediaPreparationError: If media cannot be prepared
-        """
-        if not media_info or 'id' not in media_info:
-            raise MediaPreparationError("Invalid media info provided")
-        
-        media_id = media_info['id']
-        
-        # Check if we have this media item in cache
-        cached_path = self.cache.get_cached_path(media_id)
-        if cached_path and os.path.exists(cached_path):
-            self.logger.info(f"Using cached media: {media_id}")
-            return cached_path
-        
-        # If not in cache, we need to fetch/prepare it
-        try:
-            # First check if media_info has a url field (from NDEF tag)
-            if 'url' in media_info and media_info['url']:
-                url = media_info['url']
-                if ('youtube.com' in url or 'youtu.be' in url or 'music.youtube.com' in url):
-                    self.logger.info(f"Preparing media from URL field: {url}")
-                    # Create YouTube info with the URL
-                    youtube_info = media_info.copy()
-                    youtube_info['source_type'] = 'youtube'
-                    return self._prepare_youtube_media(youtube_info)
-            
-            # Fall back to traditional source_type based handling
-            source_type = media_info.get('source_type', 'unknown')
-            if source_type == 'youtube':
-                return self._prepare_youtube_media(media_info)
-            elif source_type == 'local':
-                return self._prepare_local_media(media_info)
-            else:
-                raise MediaPreparationError(f"Unsupported media source type: {source_type}")
-        except Exception as e:
-            self.logger.error(f"Failed to prepare media {media_id}: {e}")
-            raise MediaPreparationError(f"Failed to prepare media: {str(e)}")
-    
-    def _prepare_youtube_media(self, media_info: Dict) -> str:
-        """
-        Prepare YouTube media for playback.
-        
-        Args:
-            media_info (dict): Media information
-            
-        Returns:
-            str: Path to media file
-            
-        Raises:
-            MediaPreparationError: If media cannot be prepared
-        """
-        media_id = media_info['id']
-        url = media_info.get('url')
-        
-        if not url:
-            raise MediaPreparationError(f"No URL provided for YouTube media: {media_id}")
-        
-        try:
-            # Download the media
-            self.logger.info(f"Downloading YouTube media: {url}")
-            downloaded_path = self.youtube_downloader.download(url)
-            
-            # Add to cache
-            cache_path = self.cache.add_to_cache(downloaded_path, media_id, metadata=media_info)
-            
-            # Update library
-            self._update_library_entry(media_id, media_info, file_path=cache_path)
+            # Update last_played in database
+            try:
+                current_time = int(time.time())
+                db_manager.save_media_info(media_id, {'last_played': current_time})
+            except Exception as e:
+                logger.warning(f"Failed to update last_played time: {str(e)}")
             
             return cache_path
         
-        except Exception as e:
-            self.logger.error(f"Failed to prepare YouTube media {media_id}: {e}")
-            raise MediaPreparationError(f"Failed to prepare YouTube media: {str(e)}")
+        # If not cached, we need to download/process
+        source_url = media_info.get('source_url') or media_info.get('url')
+        if not source_url:
+            raise MediaPreparationError(f"No source URL for media {media_id}")
+        
+        logger.info(f"Media not in cache, downloading: {media_id} from {source_url}")
+        
+        # Handle different media types
+        if 'youtube.com' in source_url or 'youtu.be' in source_url:
+            # Download from YouTube
+            path = _download_from_youtube(media_id, source_url)
+            
+            # Update database with path and any new metadata
+            info = {'local_path': path}
+            db_manager.save_media_info(media_id, info)
+            
+            return path
+        else:
+            # For other URL types, assume it's a direct link to a file
+            raise MediaPreparationError(f"Unsupported URL type: {source_url}")
+        
+    except Exception as e:
+        logger.error(f"Error preparing media {media_id}: {str(e)}")
+        raise MediaPreparationError(f"Failed to prepare media: {str(e)}")
+
+def get_media_info(url):
+    """
+    Get detailed information about a media item from its URL.
+
+    Args:
+        url (str): Media URL (YouTube or direct file URL)
+
+    Returns:
+        dict: Media details including title, duration, etc.
+    """
+    _check_initialized()
     
-    def _prepare_local_media(self, media_info: Dict) -> str:
-        """
-        Prepare local media for playback.
+    try:
+        # Handle YouTube URLs
+        if 'youtube.com' in url or 'youtu.be' in url:
+            return _get_youtube_info(url)
         
-        Args:
-            media_info (dict): Media information
-            
-        Returns:
-            str: Path to media file
-            
-        Raises:
-            MediaPreparationError: If media cannot be prepared
-        """
-        media_id = media_info['id']
-        file_path = media_info.get('file_path')
+        # Handle direct file URLs
+        # TODO: Implement direct file URL handling if needed
         
-        if not file_path or not os.path.exists(file_path):
-            raise MediaPreparationError(f"Invalid file path for local media: {media_id}")
+        raise InvalidURLError(f"Unsupported URL type: {url}")
         
-        try:
-            # Add to cache
-            cache_path = self.cache.add_to_cache(file_path, media_id, metadata=media_info)
-            
-            # Update library
-            self._update_library_entry(media_id, media_info, file_path=cache_path)
-            
-            return cache_path
+    except Exception as e:
+        logger.error(f"Error getting media info for URL {url}: {str(e)}")
+        raise
         
-        except Exception as e:
-            self.logger.error(f"Failed to prepare local media {media_id}: {e}")
-            raise MediaPreparationError(f"Failed to prepare local media: {str(e)}")
+def get_media_cache_status(media_id):
+    """
+    Get cache status for a specific media item.
+
+    Args:
+        media_id (str): Media identifier
+
+    Returns:
+        dict: Cache status including cached path, size, etc.
+    """
+    _check_initialized()
     
-    def _update_library_entry(self, media_id: str, media_info: Dict, file_path: str = None) -> None:
-        """
-        Update or create a library entry for a media item.
+    try:
+        cached_path = _get_cached_path(media_id)
         
-        Args:
-            media_id (str): Media identifier
-            media_info (dict): Media information
-            file_path (str, optional): Path to the media file
-        """
-        # Get existing entry or create new one
-        entry = self.library['items'].get(media_id, {})
-        
-        # Update with new info
-        entry.update(media_info)
-        
-        # Add file info if provided
-        if file_path and os.path.exists(file_path):
-            # Extract metadata
-            file_metadata = metadata_processor.extract_metadata(file_path)
-            
-            # Update entry with file metadata
-            entry.update({
-                'file_path': file_path,
-                'size_bytes': file_size(file_path),
-                'last_accessed': time.time(),
-                'format': get_file_extension(file_path),
-                'metadata': file_metadata
-            })
-        
-        # Store in library
-        self.library['items'][media_id] = entry
-        
-        # Save library
-        self._save_library()
-    
-    def get_media_info(self, media_id: str) -> Dict:
-        """
-        Get detailed information about a media item.
-
-        Args:
-            media_id (str): Media identifier
-
-        Returns:
-            dict: Media details including path, title, duration, etc.
-        """
-        # Check if media exists in library
-        if media_id not in self.library['items']:
-            return {}
-        
-        media_info = self.library['items'][media_id].copy()
-        
-        # Get cached file path
-        cached_path = self.cache.get_cached_path(media_id)
-        if cached_path:
-            media_info['file_path'] = cached_path
-            
-            # Update last accessed time
-            self.library['items'][media_id]['last_accessed'] = time.time()
-            self._save_library()
-        
-        return media_info
-    
-    def add_youtube_media(self, url: str, title: Optional[str] = None, tags: Optional[List[str]] = None) -> str:
-        """
-        Add a YouTube video/audio to the media library.
-
-        Args:
-            url (str): YouTube URL
-            title (str, optional): Custom title for the media
-            tags (list, optional): List of tags to associate with this media
-
-        Returns:
-            str: Media ID of the added media
-
-        Raises:
-            InvalidURLError: If URL is not a valid YouTube URL
-            DownloadError: If media cannot be downloaded
-        """
-        # Validate URL
-        if not self.youtube_downloader.validate_url(url):
-            raise InvalidURLError(f"Invalid YouTube URL: {url}")
-        
-        try:
-            # Generate a unique media ID
-            media_id = self._generate_media_id()
-            
-            # Get video info
-            video_info = self.youtube_downloader.get_video_info(url)
-            
-            # Use provided title or the one from YouTube
-            media_title = title or video_info.get('title', 'Unknown Title')
-            
-            # Create media info
-            media_info = {
-                'id': media_id,
-                'title': media_title,
-                'source_type': 'youtube',
-                'url': url,
-                'original_title': video_info.get('title', ''),
-                'duration': video_info.get('duration', 0),
-                'thumbnail': video_info.get('thumbnail', ''),
-                'added': time.time(),
-                'tags': tags or []
+        if not cached_path:
+            return {
+                'cached': False,
+                'path': None,
+                'size_bytes': 0,
+                'timestamp': 0
             }
-            
-            # Download the media
-            self.logger.info(f"Adding YouTube media: {url}")
-            downloaded_path = self.youtube_downloader.download(url, custom_filename=media_title)
-            
-            # Add to cache
-            cache_path = self.cache.add_to_cache(downloaded_path, media_id, metadata=media_info)
-            
-            # Update library
-            self._update_library_entry(media_id, media_info, file_path=cache_path)
-            
-            # Generate thumbnail if not existing
-            thumbnail_path = os.path.join(self.thumbnails_dir, f"{media_id}.jpg")
-            if video_info.get('thumbnail') and not os.path.exists(thumbnail_path):
-                try:
-                    metadata_processor.generate_thumbnail(
-                        video_info['thumbnail'], 
-                        thumbnail_path, 
-                        size=(300, 300)
-                    )
-                    media_info['thumbnail_path'] = thumbnail_path
-                    self._update_library_entry(media_id, media_info)
-                except Exception as e:
-                    self.logger.warning(f"Failed to generate thumbnail: {e}")
-            
-            return media_id
-            
-        except Exception as e:
-            self.logger.error(f"Failed to add YouTube media: {e}")
-            raise DownloadError(f"Failed to add YouTube media: {str(e)}")
-    
-    def add_local_media(self, file_path: str, title: Optional[str] = None, tags: Optional[List[str]] = None) -> str:
-        """
-        Add a local audio file to the media library.
-
-        Args:
-            file_path (str): Path to local audio file
-            title (str, optional): Custom title for the media
-            tags (list, optional): List of tags to associate with this media
-
-        Returns:
-            str: Media ID of the added media
-
-        Raises:
-            FileNotFoundError: If file does not exist
-            UnsupportedFormatError: If file format is not supported
-        """
-        # Check if file exists
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"File not found: {file_path}")
         
-        # Check if format is supported
-        file_ext = get_file_extension(file_path)
-        if file_ext not in self.allowed_formats:
-            raise UnsupportedFormatError(
-                f"Unsupported file format: {file_ext}. Allowed formats: {', '.join(self.allowed_formats)}"
-            )
-        
-        try:
-            # Generate a unique media ID
-            media_id = self._generate_media_id()
-            
-            # Extract metadata from file
-            file_metadata = metadata_processor.extract_metadata(file_path)
-            
-            # Use provided title, metadata title, or filename
-            if title:
-                media_title = title
-            elif file_metadata.get('title'):
-                media_title = file_metadata['title']
-            else:
-                media_title = os.path.splitext(os.path.basename(file_path))[0]
-            
-            # Create media info
-            media_info = {
-                'id': media_id,
-                'title': media_title,
-                'source_type': 'local',
-                'file_path': file_path,
-                'original_path': file_path,
-                'duration': file_metadata.get('duration', 0),
-                'added': time.time(),
-                'tags': tags or [],
-                'metadata': file_metadata
-            }
-            
-            # Add to cache
-            cache_path = self.cache.add_to_cache(file_path, media_id, metadata=media_info)
-            
-            # Update library
-            self._update_library_entry(media_id, media_info, file_path=cache_path)
-            
-            # Generate thumbnail from audio file if possible
-            thumbnail_path = os.path.join(self.thumbnails_dir, f"{media_id}.jpg")
-            try:
-                metadata_processor.generate_thumbnail(
-                    file_path, 
-                    thumbnail_path, 
-                    size=(300, 300)
-                )
-                media_info['thumbnail_path'] = thumbnail_path
-                self._update_library_entry(media_id, media_info)
-            except Exception as e:
-                self.logger.warning(f"Failed to generate thumbnail: {e}")
-            
-            return media_id
-            
-        except (FileNotFoundError, UnsupportedFormatError):
-            # Re-raise these specific exceptions
-            raise
-        except Exception as e:
-            self.logger.error(f"Failed to add local media: {e}")
-            raise MediaError(f"Failed to add local media: {str(e)}")
-    
-    def remove_media(self, media_id: str) -> bool:
-        """
-        Remove media from the library and cache.
-
-        Args:
-            media_id (str): Media identifier
-
-        Returns:
-            bool: True if successfully removed
-        """
-        if media_id not in self.library['items']:
-            return False
-        
-        try:
-            # Get media info
-            media_info = self.library['items'][media_id]
-            
-            # Remove from cache
-            self.cache.remove_from_cache(media_id)
-            
-            # Remove thumbnail if exists
-            thumbnail_path = media_info.get('thumbnail_path')
-            if thumbnail_path and os.path.exists(thumbnail_path):
-                try:
-                    os.remove(thumbnail_path)
-                except Exception as e:
-                    self.logger.warning(f"Failed to remove thumbnail {thumbnail_path}: {e}")
-            
-            # Remove from library
-            del self.library['items'][media_id]
-            self._save_library()
-            
-            self.logger.info(f"Removed media: {media_id}")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to remove media {media_id}: {e}")
-            return False
-    
-    def get_cache_status(self) -> Dict:
-        """
-        Get status of the media cache.
-
-        Returns:
-            dict: Cache status including size, item count, etc.
-        """
-        # Get cache size
-        cache_size_bytes = self.cache.get_cache_size()
+        file_stats = os.stat(cached_path)
         
         return {
-            'size_bytes': cache_size_bytes,
-            'size_mb': round(cache_size_bytes / (1024 * 1024), 2),
-            'max_size_mb': self.max_cache_size_mb,
-            'usage_percent': round((cache_size_bytes / (self.max_cache_size_mb * 1024 * 1024)) * 100, 2),
-            'item_count': len(self.library['items']),
-            'cache_dir': self.cache_dir
+            'cached': True,
+            'path': cached_path,
+            'size_bytes': file_stats.st_size,
+            'size_mb': round(file_stats.st_size / (1024 * 1024), 2),
+            'timestamp': file_stats.st_mtime,
+            'date': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(file_stats.st_mtime))
         }
-    
-    def clear_cache(self, older_than: Optional[int] = None) -> int:
-        """
-        Clear media cache.
+    except Exception as e:
+        logger.error(f"Error getting cache status for media {media_id}: {str(e)}")
+        return {'cached': False, 'error': str(e)}
 
-        Args:
-            older_than (int, optional): Clear items older than this many days
+def queue_for_caching(media_id):
+    """
+    Queue a media item for background caching.
 
-        Returns:
-            int: Number of items cleared
-        """
-        if older_than is not None:
-            # Clear items older than specified days
-            return self.cache.cleanup_cache(max_age_days=older_than)
-        else:
-            # Clear all items
-            cleared_count = 0
-            for media_id in list(self.library['items'].keys()):
-                if self.cache.remove_from_cache(media_id):
-                    cleared_count += 1
-            
-            # Reset library
-            self.library['items'] = {}
-            self._save_library()
-            
-            return cleared_count
+    Args:
+        media_id (str): Media identifier
+
+    Returns:
+        bool: True if queued successfully
+    """
+    _check_initialized()
     
-    def download_with_progress(self, url: str, progress_callback: Callable[[float], None]) -> str:
-        """
-        Download YouTube media with progress reporting.
+    try:
+        media_info = db_manager.get_media_info(media_id)
+        if not media_info:
+            raise MediaError(f"Media with ID {media_id} not found in database")
         
-        Args:
-            url (str): YouTube URL
-            progress_callback (callable): Function to call with progress (0-100)
-            
-        Returns:
-            str: Media ID of the downloaded media
-            
-        Raises:
-            InvalidURLError: If URL is not valid
-            DownloadError: If download fails
-        """
-        # Validate URL
-        if not self.youtube_downloader.validate_url(url):
-            raise InvalidURLError(f"Invalid YouTube URL: {url}")
+        # Check if already in cache
+        if _get_cached_path(media_id):
+            logger.debug(f"Media {media_id} already cached, not queuing")
+            return True
         
-        try:
-            # Generate a unique media ID
-            media_id = self._generate_media_id()
+        global _download_queue
+        with _queue_lock:
+            # Check if already in queue
+            if media_id in [item['id'] for item in _download_queue]:
+                logger.debug(f"Media {media_id} already in download queue")
+                return True
             
-            # Get video info
-            video_info = self.youtube_downloader.get_video_info(url)
-            
-            # Create media info
-            media_info = {
+            _download_queue.append({
                 'id': media_id,
-                'title': video_info.get('title', 'Unknown Title'),
-                'source_type': 'youtube',
-                'url': url,
-                'duration': video_info.get('duration', 0),
-                'thumbnail': video_info.get('thumbnail', ''),
-                'added': time.time()
+                'url': media_info.get('source_url') or media_info.get('url'),
+                'timestamp': time.time()
+            })
+            logger.debug(f"Media {media_id} added to download queue")
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error queueing media {media_id} for caching: {str(e)}")
+        raise
+
+def delete_from_cache(media_id):
+    """
+    Delete a media item from the cache.
+
+    Args:
+        media_id (str): Media identifier
+
+    Returns:
+        bool: True if deleted successfully
+    """
+    _check_initialized()
+    
+    try:
+        cached_path = _get_cached_path(media_id)
+        if not cached_path:
+            logger.debug(f"Media {media_id} not in cache, nothing to delete")
+            return True
+        
+        # Delete the file
+        os.remove(cached_path)
+        logger.debug(f"Deleted cached media {media_id}: {cached_path}")
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error deleting media {media_id} from cache: {str(e)}")
+        raise CacheError(f"Failed to delete from cache: {str(e)}")
+
+def get_cache_status():
+    """
+    Get overall status of the media cache.
+
+    Returns:
+        dict: Cache status including size, item count, etc.
+    """
+    _check_initialized()
+    
+    try:
+        # Get cache directory info
+        if not os.path.exists(_cache_dir):
+            return {
+                'total_files': 0,
+                'total_size_bytes': 0,
+                'total_size_mb': 0,
+                'max_size_mb': CONFIG.get('media', {}).get('max_cache_size_mb', MAX_CACHE_SIZE_MB),
+                'cache_dir': _cache_dir,
+                'cache_exists': False
+            }
+        
+        # Count files and total size
+        total_size = 0
+        file_count = 0
+        oldest_file = None
+        newest_file = None
+        oldest_time = float('inf')
+        newest_time = 0
+        
+        for root, dirs, files in os.walk(_cache_dir):
+            for file in files:
+                if file.endswith(tuple(ALLOWED_FORMATS)):
+                    path = os.path.join(root, file)
+                    stats = os.stat(path)
+                    total_size += stats.st_size
+                    file_count += 1
+                    
+                    # Track oldest and newest
+                    if stats.st_mtime < oldest_time:
+                        oldest_time = stats.st_mtime
+                        oldest_file = file
+                    if stats.st_mtime > newest_time:
+                        newest_time = stats.st_mtime
+                        newest_file = file
+        
+        return {
+            'total_files': file_count,
+            'total_size_bytes': total_size,
+            'total_size_mb': round(total_size / (1024 * 1024), 2),
+            'max_size_mb': CONFIG.get('media', {}).get('max_cache_size_mb', MAX_CACHE_SIZE_MB),
+            'cache_dir': _cache_dir,
+            'cache_exists': True,
+            'oldest_file': oldest_file,
+            'oldest_timestamp': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(oldest_time)) if oldest_file else None,
+            'newest_file': newest_file,
+            'newest_timestamp': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(newest_time)) if newest_file else None
+        }
+    except Exception as e:
+        logger.error(f"Error getting cache status: {str(e)}")
+        return {
+            'error': str(e),
+            'cache_dir': _cache_dir,
+            'cache_exists': os.path.exists(_cache_dir)
+        }
+
+def get_cache_size():
+    """
+    Get the current cache size in bytes.
+
+    Returns:
+        int: Cache size in bytes
+    """
+    _check_initialized()
+    
+    try:
+        # Get cache directory size
+        total_size = 0
+        
+        if not os.path.exists(_cache_dir):
+            return 0
+        
+        for root, dirs, files in os.walk(_cache_dir):
+            for file in files:
+                total_size += os.path.getsize(os.path.join(root, file))
+        
+        return total_size
+    except Exception as e:
+        logger.error(f"Error getting cache size: {str(e)}")
+        return 0
+
+def clean_cache(older_than=None, force=False):
+    """
+    Clean media cache, removing old or unused files.
+
+    Args:
+        older_than (int, optional): Remove items older than this many days
+        force (bool, optional): Force clean even if within size limits
+
+    Returns:
+        dict: Results including bytes cleaned, files deleted
+    """
+    _check_initialized()
+    
+    try:
+        if not os.path.exists(_cache_dir):
+            return {
+                'cleaned_bytes': 0,
+                'deleted_files': 0,
+                'message': "Cache directory does not exist"
+            }
+        
+        # Get cache status
+        cache_status = get_cache_status()
+        max_size_bytes = cache_status['max_size_mb'] * 1024 * 1024
+        current_size_bytes = cache_status['total_size_bytes']
+        
+        # If not forcing and under size limit, check if cleaning needed
+        if not force and current_size_bytes < max_size_bytes and not older_than:
+            logger.debug(f"Cache size {current_size_bytes} is under limit {max_size_bytes}, not cleaning")
+            return {
+                'cleaned_bytes': 0,
+                'deleted_files': 0,
+                'message': "Cache is under size limit, no cleaning needed"
+            }
+        
+        # Collect files to clean
+        files_to_clean = []
+        current_time = time.time()
+        
+        for root, dirs, files in os.walk(_cache_dir):
+            for file in files:
+                path = os.path.join(root, file)
+                stats = os.stat(path)
+                
+                # Check age if older_than specified
+                if older_than:
+                    file_age_days = (current_time - stats.st_mtime) / (86400)  # seconds in a day
+                    if file_age_days >= older_than:
+                        files_to_clean.append((path, stats.st_size, stats.st_mtime))
+                else:
+                    files_to_clean.append((path, stats.st_size, stats.st_mtime))
+        
+        # Sort by last modified (oldest first)
+        files_to_clean.sort(key=lambda x: x[2])
+        
+        # Delete files until we're under the limit or all files processed
+        bytes_cleaned = 0
+        files_deleted = 0
+        
+        for path, size, mtime in files_to_clean:
+            # If not forcing and we're below target size, stop cleaning
+            if not force and not older_than and (current_size_bytes - bytes_cleaned) < max_size_bytes * 0.8:
+                break
+                
+            try:
+                os.remove(path)
+                bytes_cleaned += size
+                files_deleted += 1
+                logger.debug(f"Cleaned cache file: {path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete cache file {path}: {str(e)}")
+        
+        message = f"Cleaned {files_deleted} files ({bytes_cleaned / (1024*1024):.2f} MB)"
+        if older_than:
+            message += f" older than {older_than} days"
+            
+        logger.info(message)
+        
+        return {
+            'cleaned_bytes': bytes_cleaned,
+            'deleted_files': files_deleted,
+            'message': message
+        }
+    except Exception as e:
+        logger.error(f"Error cleaning cache: {str(e)}")
+        raise CacheError(f"Failed to clean cache: {str(e)}")
+
+def save_uploaded_media(media_id, file_object):
+    """
+    Save an uploaded media file to the local storage.
+
+    Args:
+        media_id (str): Media identifier to associate with the file
+        file_object (FileStorage): File object from a form upload
+
+    Returns:
+        str: Path to the saved file
+    """
+    _check_initialized()
+    
+    try:
+        # Create directory for user uploads if it doesn't exist
+        uploads_dir = os.path.join(_cache_dir, 'uploads')
+        os.makedirs(uploads_dir, exist_ok=True)
+        
+        # Get file extension
+        filename = file_object.filename
+        extension = os.path.splitext(filename)[1].lower()
+        if not extension:
+            extension = '.mp3'  # Default extension if none provided
+        
+        # Create a unique filename
+        new_filename = f"{media_id}{extension}"
+        file_path = os.path.join(uploads_dir, new_filename)
+        
+        # Save the file
+        file_object.save(file_path)
+        logger.info(f"Saved uploaded file: {file_path}")
+        
+        return file_path
+    except Exception as e:
+        logger.error(f"Error saving uploaded file: {str(e)}")
+        raise MediaError(f"Failed to save uploaded file: {str(e)}")
+
+# Private methods
+
+def _check_initialized():
+    """Check if the media manager is initialized."""
+    if not _initialized:
+        logger.error("Media manager not initialized")
+        raise MediaError("Media manager not initialized. Call initialize() first.")
+
+def _get_cached_path(media_id):
+    """
+    Get path to cached media file if it exists.
+
+    Args:
+        media_id (str): Media identifier
+
+    Returns:
+        str or None: Path to cached file or None if not cached
+    """
+    if not media_id:
+        return None
+    
+    # Check for file with various extensions
+    for ext in ALLOWED_FORMATS:
+        path = os.path.join(_cache_dir, f"{media_id}.{ext}")
+        if os.path.exists(path):
+            return path
+    
+    # Check in uploads directory
+    uploads_dir = os.path.join(_cache_dir, 'uploads')
+    if os.path.exists(uploads_dir):
+        for ext in ALLOWED_FORMATS:
+            path = os.path.join(uploads_dir, f"{media_id}.{ext}")
+            if os.path.exists(path):
+                return path
+    
+    return None
+
+def _download_from_youtube(media_id, url):
+    """
+    Download audio from YouTube.
+
+    Args:
+        media_id (str): Media identifier
+        url (str): YouTube URL
+
+    Returns:
+        str: Path to downloaded file
+
+    Raises:
+        YouTubeDownloadError: If download fails
+    """
+    try:
+        # Create output directory if it doesn't exist
+        os.makedirs(_cache_dir, exist_ok=True)
+        
+        # Set output filename
+        output_path = os.path.join(_cache_dir, f"{media_id}.%(ext)s")
+        
+        # Configure yt-dlp options
+        options = YT_DLP_OPTIONS.copy()
+        options['outtmpl'] = output_path
+        
+        # Download the video
+        logger.info(f"Downloading YouTube video: {url}")
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(url, download=True)
+            
+            # Get the output file
+            if 'ext' in info:
+                downloaded_file = os.path.join(_cache_dir, f"{media_id}.{info['ext']}")
+            else:
+                # If extraction failed to provide the extension, look for mp3
+                downloaded_file = os.path.join(_cache_dir, f"{media_id}.mp3")
+            
+            # Verify file exists
+            if not os.path.exists(downloaded_file):
+                # Try finding the file with different extensions
+                for ext in ALLOWED_FORMATS:
+                    test_file = os.path.join(_cache_dir, f"{media_id}.{ext}")
+                    if os.path.exists(test_file):
+                        downloaded_file = test_file
+                        break
+                
+                if not os.path.exists(downloaded_file):
+                    raise YouTubeDownloadError(f"Download completed but file not found: {media_id}")
+            
+            logger.info(f"Downloaded YouTube video to: {downloaded_file}")
+            return downloaded_file
+            
+    except Exception as e:
+        logger.error(f"Error downloading YouTube video {url}: {str(e)}")
+        raise YouTubeDownloadError(f"Failed to download YouTube video: {str(e)}")
+
+def _get_youtube_info(url):
+    """
+    Get information about a YouTube video without downloading.
+
+    Args:
+        url (str): YouTube URL
+
+    Returns:
+        dict: Video information (title, duration, thumbnail, etc.)
+
+    Raises:
+        YouTubeInfoError: If info cannot be retrieved
+    """
+    try:
+        # Configure yt-dlp options for info only
+        options = {
+            'format': 'bestaudio/best',
+            'quiet': True,
+            'no_warnings': True,
+            'noplaylist': True,
+            'skip_download': True
+        }
+        
+        # Get video info
+        logger.debug(f"Fetching YouTube info: {url}")
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(url, download=False)
+            
+            # Extract relevant fields
+            result = {
+                'title': info.get('title', ''),
+                'duration': info.get('duration', 0),
+                'thumbnail': info.get('thumbnail', ''),
+                'uploader': info.get('uploader', ''),
+                'view_count': info.get('view_count', 0),
+                'url': url
             }
             
-            # Download with progress reporting
-            downloaded_path = self.youtube_downloader.download_with_progress(url, progress_callback)
+            return result
             
-            # Add to cache
-            cache_path = self.cache.add_to_cache(downloaded_path, media_id, metadata=media_info)
+    except Exception as e:
+        logger.error(f"Error getting YouTube info for {url}: {str(e)}")
+        raise YouTubeInfoError(f"Failed to get YouTube info: {str(e)}")
+
+def _start_download_thread():
+    """Start the background download thread for queued items."""
+    global _download_thread, _stop_downloads
+    
+    _stop_downloads = False
+    
+    if _download_thread and _download_thread.is_alive():
+        logger.debug("Download thread already running")
+        return
+    
+    _download_thread = threading.Thread(target=_download_worker, daemon=True)
+    _download_thread.start()
+    logger.debug("Started background download thread")
+
+def _download_worker():
+    """Worker function for processing the download queue."""
+    global _download_queue, _stop_downloads
+    
+    logger.debug("Download worker thread started")
+    
+    while not _stop_downloads:
+        try:
+            # Get item from queue
+            media_to_download = None
+            with _queue_lock:
+                if _download_queue:
+                    media_to_download = _download_queue.pop(0)
             
-            # Update library
-            self._update_library_entry(media_id, media_info, file_path=cache_path)
+            if not media_to_download:
+                # Queue is empty, sleep and check again
+                time.sleep(1)
+                continue
             
-            return media_id
+            media_id = media_to_download.get('id')
+            url = media_to_download.get('url')
             
+            if not media_id or not url:
+                logger.warning(f"Invalid download queue item: {media_to_download}")
+                continue
+            
+            logger.info(f"Processing queued download: {media_id} from {url}")
+            
+            # Check if already cached
+            if _get_cached_path(media_id):
+                logger.debug(f"Media {media_id} already cached, skipping download")
+                continue
+            
+            # Check cache size before download
+            cache_status = get_cache_status()
+            if cache_status['total_size_mb'] > cache_status['max_size_mb']:
+                logger.info("Cache full, cleaning before download")
+                clean_cache()
+            
+            # Download the file
+            if 'youtube.com' in url or 'youtu.be' in url:
+                try:
+                    # Download from YouTube
+                    path = _download_from_youtube(media_id, url)
+                    
+                    # Update database with path and metadata
+                    media_info = _get_youtube_info(url)
+                    media_info['local_path'] = path
+                    db_manager.save_media_info(media_id, media_info)
+                    
+                    logger.info(f"Successfully downloaded and cached: {media_id}")
+                except Exception as e:
+                    logger.error(f"Failed to download media {media_id}: {str(e)}")
+            else:
+                logger.warning(f"Unsupported URL type for download: {url}")
+        
         except Exception as e:
-            self.logger.error(f"Failed to download media with progress: {e}")
-            raise DownloadError(f"Failed to download media: {str(e)}")
+            logger.error(f"Error in download worker: {str(e)}")
+            time.sleep(5)  # Delay on error
     
-    def get_all_media(self) -> List[Dict]:
-        """
-        Get all media items in the library.
-        
-        Returns:
-            list: List of media info dictionaries
-        """
-        return [self.get_media_info(media_id) for media_id in self.library['items']]
-    
-    def search_media(self, query: str) -> List[Dict]:
-        """
-        Search for media items in the library.
-        
-        Args:
-            query (str): Search query
-            
-        Returns:
-            list: List of matching media info dictionaries
-        """
-        query = query.lower()
-        results = []
-        
-        for media_id, info in self.library['items'].items():
-            # Search in title
-            if query in info.get('title', '').lower():
-                results.append(self.get_media_info(media_id))
-                continue
-            
-            # Search in tags
-            if any(query in tag.lower() for tag in info.get('tags', [])):
-                results.append(self.get_media_info(media_id))
-                continue
-            
-            # Search in metadata
-            metadata = info.get('metadata', {})
-            if any(query in str(v).lower() for v in metadata.values() if v):
-                results.append(self.get_media_info(media_id))
-                continue
-        
-        return results
-    
-    def get_media_by_tag(self, tag: str) -> List[Dict]:
-        """
-        Get media items with a specific tag.
-        
-        Args:
-            tag (str): Tag to search for
-            
-        Returns:
-            list: List of matching media info dictionaries
-        """
-        tag = tag.lower()
-        results = []
-        
-        for media_id, info in self.library['items'].items():
-            if tag in [t.lower() for t in info.get('tags', [])]:
-                results.append(self.get_media_info(media_id))
-        
-        return results
+    logger.debug("Download worker thread stopping")

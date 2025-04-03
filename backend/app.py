@@ -37,8 +37,9 @@ def initialize_components():
     # Initialize NFC controller
     nfc_controller.initialize()
     
-    # Initialize media manager
-    media_manager.initialize()
+    # Initialize media manager if not already initialized
+    if not media_manager.is_initialized():
+        media_manager.initialize()
     
     # Initialize audio controller
     audio_controller.initialize()
@@ -110,8 +111,9 @@ def shutdown():
     # Stop audio playback
     audio_controller.shutdown()
     
-    # Shutdown media manager
-    media_manager.shutdown()
+    # Shutdown media manager if initialized
+    if hasattr(media_manager, 'is_initialized') and media_manager.is_initialized():
+        media_manager.shutdown()
     
     # Shutdown NFC controller
     nfc_controller.shutdown()

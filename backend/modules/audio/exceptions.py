@@ -1,7 +1,8 @@
 """
-Audio module exceptions.
+Audio module exception classes.
 
-This module defines all audio-related exceptions used throughout the audio module.
+This module defines all exceptions related to audio playback, Bluetooth connections,
+and system sound functionality.
 """
 
 class AudioError(Exception):
@@ -34,4 +35,8 @@ class MediaLoadError(AudioError):
 
 class SystemSoundError(AudioError):
     """Exception raised when system sound cannot be played."""
+    pass
+
+class BlueALSAError(AudioError):
+    """Exception raised when BlueALSA operation fails."""
     pass

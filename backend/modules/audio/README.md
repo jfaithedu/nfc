@@ -1,17 +1,113 @@
 # Audio Module - Implementation Guide
 
+> **CRITICAL: BlueALSA INTEGRATION ISSUE - NEW APPROACH**
+>
+> The previous BlueALSA implementation strategy was problematic. This document outlines a new, simplified approach using standard Raspberry Pi OS packages instead of custom-compiled solutions.
+
 ## Overview
 
 The Audio Module is responsible for handling all audio playback functionality for the NFC music player. It manages Bluetooth connectivity, audio streaming, volume control, and playback status. This module provides a reliable audio interface that works with Bluetooth speakers and ensures consistent playback experience.
 
-## Core Responsibilities
+## New Implementation Strategy
 
-1. Manage Bluetooth device connections
-2. Control audio playback (play, pause, stop, seek)
-3. Handle volume adjustments and mute functionality
-4. Manage playback state and provide status information
-5. Play system sounds (error, success notifications)
-6. Support Bluetooth device discovery and pairing
+### Key Design Principles
+
+1. **Use standard packages** - Avoid compiling from source
+2. **Simplify architecture** - Choose a single audio backend
+3. **Separate concerns** - Bluetooth connection management vs audio playback
+4. **Resource efficiency** - Optimized for Raspberry Pi Zero
+
+### Recommended Approach
+
+1. **Use standard Raspberry Pi OS packages**:
+   - Use `bluealsa` from repositories instead of compiling `bluez-alsa` from source
+   - Use Pi's native Bluetooth stack with `pi-bluetooth`
+   - Remove PulseAudio to prevent conflicts and save resources
+
+2. **Direct control via D-Bus**:
+   - Implement D-Bus communication with BlueZ
+   - Avoid unnecessary layers and dependencies
+
+3. **Lightweight playback**:
+   - Use GStreamer with minimal plugins for playback
+   - Implement proper resource management
+
+## Installation Setup
+
+### Required Packages
+
+```bash
+# System packages
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+  bluetooth \
+  bluez \
+  bluez-tools \
+  pi-bluetooth \
+  bluealsa \
+  alsa-utils \
+  dbus \
+  python3-dbus \
+  python3-gi \
+  gstreamer1.0-tools \
+  gstreamer1.0-plugins-base \
+  gstreamer1.0-plugins-good \
+  gstreamer1.0-alsa
+
+# Python packages
+pip install pydbus dbus-python pygobject pexpect
+```
+
+### Repository Setup
+
+The setup script must explicitly add the Raspberry Pi repository if not running on Raspberry Pi OS:
+
+```bash
+# Add Raspberry Pi repository (if not on Raspberry Pi OS)
+if ! grep -q "raspbian" /etc/apt/sources.list /etc/apt/sources.list.d/*; then
+  echo "Adding Raspberry Pi repository..."
+  echo "deb http://archive.raspberrypi.org/debian/ buster main" | sudo tee /etc/apt/sources.list.d/raspi.list
+  wget -qO - https://archive.raspberrypi.org/debian/raspberrypi.gpg.key | sudo apt-key add -
+  sudo apt-get update
+fi
+```
+
+### BlueALSA Setup
+
+1. **Install packages**:
+   ```bash
+   sudo apt-get install -y bluealsa
+   ```
+
+2. **Create service** (only if it doesn't exist):
+   ```bash
+   # Create bluealsa service file if not already present
+   if [ ! -f /etc/systemd/system/bluealsa.service ]; then
+     sudo bash -c 'cat > /etc/systemd/system/bluealsa.service << EOF
+   [Unit]
+   Description=BluALSA service
+   After=bluetooth.service
+   Requires=bluetooth.service
+
+   [Service]
+   Type=simple
+   ExecStart=/usr/bin/bluealsa -p a2dp-sink -p a2dp-source
+   Restart=on-failure
+
+   [Install]
+   WantedBy=multi-user.target
+   EOF'
+   fi
+   ```
+
+3. **Enable and start services**:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable bluetooth
+   sudo systemctl start bluetooth
+   sudo systemctl enable bluealsa
+   sudo systemctl start bluealsa
+   ```
 
 ## Implementation Details
 
@@ -19,721 +115,188 @@ The Audio Module is responsible for handling all audio playback functionality fo
 
 ```
 audio/
-├── __init__.py                 # Package initialization
-├── audio_controller.py         # Main controller exposed to other modules
-├── bluetooth_manager.py        # Bluetooth device management
-├── playback_handler.py         # Audio playback functionality
+├── __init__.py                 # Main API interface
+├── exceptions.py               # Audio-specific exceptions
+├── bluetooth_manager.py        # Bluetooth connectivity
+├── playback_handler.py         # Audio playback
 ├── system_sounds.py            # System notification sounds
-└── exceptions.py               # Audio-specific exception definitions
+└── utils.py                    # Utility functions
 ```
 
 ### Key Components
 
-#### 1. Audio Controller (`audio_controller.py`)
+#### 1. Audio Controller (`__init__.py`)
 
-This is the main interface exposed to other modules:
+Provides the main API interface that other modules will use:
 
 ```python
 def initialize():
-    """
-    Initialize the audio subsystem.
-    Connect to the last used Bluetooth device if available.
-
-    Returns:
-        bool: True if initialization successful
-    """
-
+    """Initialize Bluetooth and audio subsystems."""
+    
 def shutdown():
-    """
-    Perform clean shutdown of audio subsystem.
-    """
-
+    """Clean shutdown of audio subsystems."""
+    
 def play(media_path):
-    """
-    Play audio from the specified path.
-
-    Args:
-        media_path (str): Path to the media file
-
-    Returns:
-        bool: True if playback started successfully
-
-    Raises:
-        AudioPlaybackError: If playback cannot be started
-    """
-
+    """Play audio from the specified path."""
+    
 def pause():
-    """
-    Pause current playback.
-
-    Returns:
-        bool: True if paused successfully
-    """
-
+    """Pause current playback."""
+    
 def resume():
-    """
-    Resume paused playback.
-
-    Returns:
-        bool: True if resumed successfully
-    """
-
+    """Resume paused playback."""
+    
 def stop():
-    """
-    Stop current playback.
-
-    Returns:
-        bool: True if stopped successfully
-    """
-
-def seek(position_seconds):
-    """
-    Seek to a specific position in the current track.
-
-    Args:
-        position_seconds (int): Position in seconds
-
-    Returns:
-        bool: True if seek successful
-    """
-
+    """Stop current playback."""
+    
 def set_volume(level):
-    """
-    Set volume level.
-
-    Args:
-        level (int): Volume level (0-100)
-
-    Returns:
-        int: New volume level
-    """
-
+    """Set volume level (0-100)."""
+    
 def get_volume():
-    """
-    Get current volume level.
-
-    Returns:
-        int: Current volume level (0-100)
-    """
-
-def mute():
-    """
-    Mute audio output.
-
-    Returns:
-        bool: True if muted
-    """
-
-def unmute():
-    """
-    Unmute audio output.
-
-    Returns:
-        bool: True if unmuted
-    """
-
+    """Get current volume level."""
+    
 def get_playback_status():
-    """
-    Get current playback status.
-
-    Returns:
-        dict: Playback status including:
-            - state: 'playing', 'paused', 'stopped'
-            - position: Current position in seconds
-            - duration: Total duration in seconds
-            - media_path: Path to current media
-    """
-
+    """Get current playback status."""
+    
 def play_system_sound(sound_type):
-    """
-    Play a system notification sound.
-
-    Args:
-        sound_type (str): Type of sound ('error', 'success', etc.)
-
-    Returns:
-        bool: True if sound played successfully
-    """
-
-def play_error_sound():
-    """
-    Play the error notification sound.
-
-    Returns:
-        bool: True if sound played successfully
-    """
-
-def play_success_sound():
-    """
-    Play the success notification sound.
-
-    Returns:
-        bool: True if sound played successfully
-    """
+    """Play a system notification sound."""
 ```
 
 #### 2. Bluetooth Manager (`bluetooth_manager.py`)
 
-Handles Bluetooth device management:
+Handles Bluetooth device discovery and connection:
 
 ```python
 class BluetoothManager:
-    """
-    Manages Bluetooth connections and device discovery.
-    """
-
-    def __init__(self):
-        """
-        Initialize the Bluetooth manager.
-        """
-
+    """Manages Bluetooth connections using D-Bus."""
+    
     def start_discovery(self, timeout=30):
-        """
-        Start discovery for Bluetooth devices.
-
-        Args:
-            timeout (int, optional): Discovery timeout in seconds
-
-        Returns:
-            bool: True if discovery started
-        """
-
+        """Start Bluetooth device discovery."""
+        
     def get_discovered_devices(self):
-        """
-        Get list of discovered devices.
-
-        Returns:
-            list: List of device dictionaries with name, address, and type
-        """
-
-    def stop_discovery(self):
-        """
-        Stop the discovery process.
-
-        Returns:
-            bool: True if discovery stopped
-        """
-
+        """Get list of discovered devices."""
+        
     def connect_device(self, device_address):
-        """
-        Connect to a Bluetooth device.
-
-        Args:
-            device_address (str): Bluetooth device address
-
-        Returns:
-            bool: True if connected successfully
-
-        Raises:
-            BluetoothConnectionError: If connection fails
-        """
-
+        """Connect to a Bluetooth device."""
+        
     def disconnect_device(self):
-        """
-        Disconnect the current device.
-
-        Returns:
-            bool: True if disconnected successfully
-        """
-
+        """Disconnect current device."""
+        
     def get_connected_device(self):
-        """
-        Get information about the currently connected device.
-
-        Returns:
-            dict or None: Device information or None if not connected
-        """
-
-    def is_device_connected(self, device_address=None):
-        """
-        Check if a device is connected.
-
-        Args:
-            device_address (str, optional): Device to check, or current device if None
-
-        Returns:
-            bool: True if device is connected
-        """
-
-    def save_paired_device(self, device_address, device_name):
-        """
-        Save a device as the preferred device.
-
-        Args:
-            device_address (str): Bluetooth device address
-            device_name (str): Human-readable device name
-
-        Returns:
-            bool: True if saved successfully
-        """
-
-    def get_saved_devices(self):
-        """
-        Get all saved devices.
-
-        Returns:
-            list: List of saved device dictionaries
-        """
+        """Get info about currently connected device."""
 ```
 
 #### 3. Playback Handler (`playback_handler.py`)
 
-Handles audio playback functionality:
+Handles audio playback via GStreamer:
 
 ```python
 class AudioPlayer:
-    """
-    Handles audio playback using PulseAudio and BlueAlsa.
-    """
-
-    def __init__(self):
-        """
-        Initialize the audio player.
-        """
-
+    """Handles audio playback."""
+    
     def load_media(self, media_path):
-        """
-        Load a media file for playback.
-
-        Args:
-            media_path (str): Path to media file
-
-        Returns:
-            bool: True if media loaded successfully
-
-        Raises:
-            MediaLoadError: If media cannot be loaded
-        """
-
+        """Load media file for playback."""
+        
     def play(self):
-        """
-        Start playback of loaded media.
-
-        Returns:
-            bool: True if playback started
-        """
-
+        """Start playback."""
+        
     def pause(self):
-        """
-        Pause current playback.
-
-        Returns:
-            bool: True if paused
-        """
-
+        """Pause playback."""
+        
     def resume(self):
-        """
-        Resume paused playback.
-
-        Returns:
-            bool: True if resumed
-        """
-
+        """Resume playback."""
+        
     def stop(self):
-        """
-        Stop current playback.
-
-        Returns:
-            bool: True if stopped
-        """
-
-    def seek(self, position_seconds):
-        """
-        Seek to position in current media.
-
-        Args:
-            position_seconds (int): Position in seconds
-
-        Returns:
-            bool: True if seek successful
-        """
-
-    def get_position(self):
-        """
-        Get current playback position.
-
-        Returns:
-            int: Current position in seconds
-        """
-
-    def get_duration(self):
-        """
-        Get loaded media duration.
-
-        Returns:
-            int: Duration in seconds
-        """
-
+        """Stop playback."""
+        
     def set_volume(self, level):
-        """
-        Set volume level.
-
-        Args:
-            level (int): Volume level (0-100)
-
-        Returns:
-            int: New volume level
-        """
-
-    def get_volume(self):
-        """
-        Get current volume level.
-
-        Returns:
-            int: Current volume level (0-100)
-        """
-
-    def mute(self):
-        """
-        Mute audio output.
-
-        Returns:
-            bool: True if muted
-        """
-
-    def unmute(self):
-        """
-        Unmute audio output.
-
-        Returns:
-            bool: True if unmuted
-        """
-
-    def get_state(self):
-        """
-        Get current playback state.
-
-        Returns:
-            str: State ('playing', 'paused', 'stopped')
-        """
+        """Set volume level."""
 ```
 
-#### 4. System Sounds (`system_sounds.py`)
+## Troubleshooting Common Issues
 
-Handles system notification sounds:
+### Bluetooth Discovery Problems
 
-```python
-def initialize_system_sounds(sounds_dir):
-    """
-    Initialize system sounds from directory.
+If devices aren't being discovered:
 
-    Args:
-        sounds_dir (str): Directory containing sound files
+```bash
+# Verify Bluetooth is powered on
+bluetoothctl show
 
-    Returns:
-        bool: True if initialization successful
-    """
+# Reset Bluetooth service
+sudo systemctl restart bluetooth
+sudo systemctl restart bluealsa
 
-def play_sound(sound_type, blocking=False):
-    """
-    Play a system sound.
-
-    Args:
-        sound_type (str): Type of sound ('error', 'success', etc.)
-        blocking (bool, optional): Wait for sound to complete
-
-    Returns:
-        bool: True if sound played successfully
-    """
-
-def get_available_sounds():
-    """
-    Get list of available system sounds.
-
-    Returns:
-        list: List of available sound types
-    """
-
-def add_custom_sound(sound_type, sound_path):
-    """
-    Add a custom system sound.
-
-    Args:
-        sound_type (str): Type of sound
-        sound_path (str): Path to sound file
-
-    Returns:
-        bool: True if sound added successfully
-    """
+# Enable discovery mode
+bluetoothctl discoverable on
 ```
 
-#### 5. Exceptions (`exceptions.py`)
+### Audio Playback Issues
 
-Define audio-specific exceptions:
+If audio doesn't play through Bluetooth:
 
-```python
-class AudioError(Exception):
-    """Base exception for all audio related errors."""
-    pass
+```bash
+# Check device connection
+bluetoothctl info [MAC_ADDRESS]
 
-class AudioInitializationError(AudioError):
-    """Exception raised when audio subsystem initialization fails."""
-    pass
+# Verify BlueALSA is running
+systemctl status bluealsa
 
-class BluetoothError(AudioError):
-    """Base exception for Bluetooth related errors."""
-    pass
+# Check audio devices
+aplay -l
 
-class BluetoothDiscoveryError(BluetoothError):
-    """Exception raised when Bluetooth discovery fails."""
-    pass
-
-class BluetoothConnectionError(BluetoothError):
-    """Exception raised when Bluetooth connection fails."""
-    pass
-
-class AudioPlaybackError(AudioError):
-    """Exception raised when audio playback fails."""
-    pass
-
-class MediaLoadError(AudioError):
-    """Exception raised when media cannot be loaded."""
-    pass
-
-class SystemSoundError(AudioError):
-    """Exception raised when system sound cannot be played."""
-    pass
+# Test direct audio output
+aplay -D bluealsa:DEV=[MAC_ADDRESS],PROFILE=a2dp /usr/share/sounds/alsa/Front_Center.wav
 ```
 
-### Bluetooth Audio Integration
+### Connection Problems
 
-#### 1. Setting up Bluetooth Audio
+If devices connect but disconnect immediately:
 
-For Bluetooth audio on Raspberry Pi Zero 2 W, follow these guidelines:
+```bash
+# Check bluetoothd logs
+journalctl -u bluetooth -f
 
-1. **BlueAlsa Configuration**:
+# Check if device is trusted
+bluetoothctl trust [MAC_ADDRESS]
 
-   - Use `bluealsa` as the primary audio backend
-   - Configure for high-quality audio profiles (A2DP)
-   - Handle automatic reconnection to paired devices
+# Verify correct audio profile
+bluetoothctl info [MAC_ADDRESS] | grep "Audio Sink"
+```
 
-2. **Device Management**:
+## Testing
 
-   - Use D-Bus for communication with BlueZ (Bluetooth stack)
-   - Implement proper power management for Bluetooth
-   - Handle pairing and connection security
+Use the included testing script to verify functionality:
 
-3. **Audio Routing**:
-   - Route audio through PulseAudio to BlueAlsa
-   - Configure proper audio sink selection
-   - Handle fallback to local audio if Bluetooth unavailable
+```bash
+sudo ./setup_and_test_pi.sh
+```
 
-#### 2. Connection Management
+The script will:
+1. Install all required packages
+2. Configure BlueALSA properly
+3. Verify Bluetooth functionality
+4. Run audio module tests
 
-1. **Device Discovery**:
+## Performance Optimization
 
-   - Implement efficient Bluetooth scanning
-   - Filter for audio-capable devices only
-   - Handle discovery timeouts gracefully
+1. **Minimize latency**:
+   - Pre-buffer audio when possible
+   - Use ALSA direct when feasible 
 
-2. **Pairing Process**:
+2. **Battery life**:
+   - Disconnect Bluetooth when not in use
+   - Implement power-saving modes
 
-   - Implement secure pairing procedures
-   - Store paired device information securely
-   - Handle pairing failures with clear error messages
+3. **Memory usage**:
+   - Use efficient buffering
+   - Ensure proper cleanup after playback
 
-3. **Connection Reliability**:
-   - Implement automatic reconnection to last paired device
-   - Handle connection drops gracefully
-   - Provide clear feedback on connection status
+## Security Considerations
 
-### Audio Playback
-
-#### 1. Playback Implementation
-
-1. **Playback Engine**:
-
-   - Use reliable audio libraries (e.g., GStreamer)
-   - Support multiple audio formats (MP3, WAV, OGG, etc.)
-   - Implement proper buffering for smooth playback
-
-2. **Stream Management**:
-
-   - Handle audio streaming without gaps
-   - Implement proper queuing for continuous playback
-   - Support seeking and position control
-
-3. **Format Support**:
-   - Verify format compatibility with Bluetooth device
-   - Implement format conversion if necessary
-   - Handle metadata extraction from audio files
-
-#### 2. Volume and Equalization
-
-1. **Volume Control**:
-
-   - Implement smooth volume transitions
-   - Support device-specific volume ranges
-   - Store and restore previous volume levels
-
-2. **Audio Processing**:
-   - Consider implementing basic equalization for children's audio
-   - Limit maximum volume to protect young ears
-   - Normalize audio levels across different sources
-
-### Performance Considerations
-
-#### 1. Latency
-
-1. **Bluetooth Latency**:
-
-   - Optimize Bluetooth connections for minimal latency
-   - Pre-buffer audio to compensate for Bluetooth delay
-   - Implement adaptive buffering based on connection quality
-
-2. **Playback Responsiveness**:
-   - Minimize delay between tag detection and audio playback
-   - Optimize file loading and stream initialization
-   - Cache frequently played audio for instant playback
-
-#### 2. Resource Usage
-
-1. **CPU Usage**:
-
-   - Monitor and optimize CPU usage during playback
-   - Implement proper thread management
-   - Consider dedicated audio processing thread
-
-2. **Memory Management**:
-   - Implement proper buffer management
-   - Avoid memory leaks in long-running playback
-   - Release resources properly when not in use
-
-### Error Handling and Resilience
-
-#### 1. Connection Issues
-
-1. **Connection Failures**:
-
-   - Implement automatic retry for Bluetooth connections
-   - Provide clear feedback for connection failures
-   - Gracefully handle device unavailability
-
-2. **Playback Recovery**:
-   - Auto-resume playback after connection drops
-   - Maintain playback state during connectivity issues
-   - Implement timeout and retry logic for transient errors
-
-#### 2. Audio Problems
-
-1. **Playback Errors**:
-
-   - Handle corrupt or incompatible audio files
-   - Implement fallback options for failed playback
-   - Log detailed error information for troubleshooting
-
-2. **Device Compatibility**:
-   - Handle different Bluetooth audio profiles
-   - Address common compatibility issues with popular speakers
-   - Provide workarounds for known device-specific problems
-
-### System Integration
-
-#### 1. System Audio
-
-1. **System Sounds**:
-
-   - Implement system sound playback without interrupting media
-   - Use separate audio channel for system notifications
-   - Allow configuration of system sound volume
-
-2. **Audio Mixing**:
-   - Handle prioritization between media and system sounds
-   - Implement temporary volume reduction (ducking) for notifications
-   - Ensure smooth transitions between audio sources
-
-#### 2. Power Management
-
-1. **Battery Impact**:
-
-   - Optimize Bluetooth power usage
-   - Implement sleep modes when not playing
-   - Balance power efficiency with connection reliability
-
-2. **Device Handling**:
-   - Properly handle device sleep and wake situations
-   - Monitor device battery levels when available
-   - Implement proper shutdown procedures
-
-### Security Considerations
-
-1. **Bluetooth Security**:
-
+1. **Bluetooth pairing**:
    - Use secure pairing methods
-   - Implement proper PIN handling if required
-   - Protect against unauthorized device connections
+   - Store paired devices securely
 
-2. **Audio Content**:
-   - Validate audio sources before playback
-   - Implement proper error handling for malformed content
-   - Protect against potentially harmful audio files
-
-### Testing
-
-#### 1. Bluetooth Testing
-
-1. **Device Compatibility**:
-
-   - Test with a variety of Bluetooth speakers
-   - Verify compatibility with common speaker brands
-   - Document any device-specific considerations
-
-2. **Connection Stability**:
-   - Test long-duration connections
-   - Test reconnection after power cycles
-   - Test behavior with multiple devices in range
-
-#### 2. Audio Quality Testing
-
-1. **Playback Quality**:
-
-   - Test various audio formats and bitrates
-   - Verify consistent volume levels across sources
-   - Test playback behavior with different content types
-
-2. **Stress Testing**:
-   - Test rapid playback changes
-   - Test behavior under low memory conditions
-   - Test concurrent operations (e.g., playback during device discovery)
-
-## Common Issues and Solutions
-
-#### 1. Bluetooth Connection Problems
-
-- Issue: Device fails to connect or frequently disconnects
-- Solution: Implement connection retry logic with exponential backoff
-- Solution: Check for conflicting Bluetooth services
-- Solution: Update Bluetooth firmware and drivers
-
-#### 2. Audio Latency
-
-- Issue: High delay between command and playback
-- Solution: Optimize audio buffering parameters
-- Solution: Use compatible Bluetooth codecs when available
-- Solution: Pre-cache frequently used audio
-
-#### 3. Audio Quality Issues
-
-- Issue: Poor audio quality or dropouts
-- Solution: Check for WiFi interference and adjust channels
-- Solution: Implement audio normalization
-- Solution: Verify proper audio format support
-
-## Resources and References
-
-#### 1. Bluetooth Audio
-
-- [BlueALSA GitHub Repository](https://github.com/Arkq/bluez-alsa)
-- [Raspberry Pi Bluetooth Audio Guide](https://www.raspberrypi.org/documentation/configuration/bluetooth/audio.md)
-- [Bluetooth Audio Profiles](https://www.bluetooth.com/specifications/profiles-overview/)
-
-#### 2. Audio Libraries
-
-- [GStreamer Audio Documentation](https://gstreamer.freedesktop.org/documentation/)
-- [PulseAudio Documentation](https://www.freedesktop.org/wiki/Software/PulseAudio/Documentation/)
-- [pydbus Documentation](https://github.com/LEW21/pydbus)
-
-#### 3. Audio Processing
-
-- [Audio normalization techniques](https://en.wikipedia.org/wiki/Audio_normalization)
-- [FFmpeg Audio Filtering Guide](https://ffmpeg.org/ffmpeg-filters.html#Audio-Filters)
+2. **Input validation**:
+   - Validate all file paths before playback
+   - Check file types to prevent playback attacks

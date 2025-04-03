@@ -1,396 +1,624 @@
 """
 Audio playback handler for the NFC music player.
 
-Handles audio playback using GStreamer and provides interface for controlling media playback.
+This module provides audio playback functionality using GStreamer and BlueALSA.
+It handles media loading, playback control, and volume management.
 """
 
 import os
-import logging
 import time
+import logging
 import threading
-import gi
+import subprocess
+import json
+from typing import Dict, Optional, List, Any, Tuple
 
-# Import GStreamer
+import gi
 gi.require_version('Gst', '1.0')
 from gi.repository import Gst, GLib
 
-from .exceptions import MediaLoadError, AudioPlaybackError
+from .exceptions import (
+    AudioError,
+    AudioPlaybackError,
+    MediaLoadError
+)
 
-# Set up logger
+# Configure logging
 logger = logging.getLogger(__name__)
 
-# Playback states
-STATE_STOPPED = 'stopped'
-STATE_PLAYING = 'playing'
-STATE_PAUSED = 'paused'
+# Initialize GStreamer
+Gst.init(None)
+
 
 class AudioPlayer:
-    """
-    Handles audio playback using GStreamer.
-    """
-
-    def __init__(self):
+    """Handles audio playback using GStreamer and BlueALSA."""
+    
+    def __init__(self, config_path: str = None):
         """
         Initialize the audio player.
+        
+        Args:
+            config_path (str, optional): Path to the configuration file.
+                Default is ~/.audio_player_config.json
         """
-        # Initialize GStreamer
-        Gst.init(None)
+        # Configuration
+        self.config_path = config_path or os.path.expanduser("~/.audio_player_config.json")
+        self.config = self._load_config()
         
-        # Create GStreamer pipeline and elements
-        self._pipeline = Gst.Pipeline.new("audio-player")
-        self._source = Gst.ElementFactory.make("filesrc", "file-source")
-        self._decoder = Gst.ElementFactory.make("decodebin", "decoder")
-        self._converter = Gst.ElementFactory.make("audioconvert", "converter")
-        self._volume = Gst.ElementFactory.make("volume", "volume")
-        self._sink = Gst.ElementFactory.make("autoaudiosink", "audio-sink")
+        # GStreamer components
+        self.playbin = Gst.ElementFactory.make("playbin", "player")
+        if not self.playbin:
+            raise AudioError("Failed to create GStreamer playbin")
         
-        # Check if all elements were created successfully
-        elements = [self._pipeline, self._source, self._decoder, 
-                   self._converter, self._volume, self._sink]
+        # Playback state tracking
+        self.is_loaded = False
+        self.current_media = None
+        self.duration = -1
+        self.muted = False
+        self.previous_volume = 50  # Store volume when muted
         
-        if any(element is None for element in elements):
-            missing = [name for name, element in zip(
-                ["Pipeline", "Source", "Decoder", "Converter", "Volume", "Sink"], 
-                elements) if element is None]
-            logger.error(f"Failed to create GStreamer elements: {', '.join(missing)}")
-            raise AudioPlaybackError(f"Could not create GStreamer elements: {', '.join(missing)}")
+        # Events and threading
+        self.bus = self.playbin.get_bus()
+        self.bus.add_signal_watch()
+        self.bus.connect("message", self._on_bus_message)
         
-        # Add elements to pipeline
-        self._pipeline.add(self._source)
-        self._pipeline.add(self._decoder)
-        self._pipeline.add(self._converter)
-        self._pipeline.add(self._volume)
-        self._pipeline.add(self._sink)
+        # Set initial volume
+        self.set_volume(self.config.get("volume", 50))
         
-        # Link elements that can be linked statically
-        self._source.link(self._decoder)
-        self._converter.link(self._volume)
-        self._volume.link(self._sink)
+        # Set up BlueALSA sink
+        self._configure_audio_sink()
         
-        # Connect dynamic link function for decoder
-        self._decoder.connect("pad-added", self._on_pad_added)
+        logger.info("Audio player initialized")
+    
+    def _load_config(self) -> Dict:
+        """
+        Load configuration from file.
         
-        # Create bus to get events from GStreamer pipeline
-        self._bus = self._pipeline.get_bus()
-        self._bus.add_signal_watch()
-        self._bus.connect("message", self._on_message)
+        Returns:
+            dict: Configuration dictionary
+        """
+        try:
+            if os.path.exists(self.config_path):
+                with open(self.config_path, 'r') as f:
+                    return json.load(f)
+            return {"volume": 50}
+        except Exception as e:
+            logger.warning(f"Failed to load audio player config: {e}")
+            return {"volume": 50}
+    
+    def _save_config(self) -> None:
+        """Save configuration to file."""
+        try:
+            with open(self.config_path, 'w') as f:
+                json.dump(self.config, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to save audio player config: {e}")
+    
+    def _configure_audio_sink(self) -> None:
+        """Configure the audio sink for BlueALSA."""
+        try:
+            # Check if we should use BlueALSA or default sink
+            use_bluealsa = self._is_bluealsa_available()
+            
+            if use_bluealsa:
+                # Get the device path for the connected Bluetooth device
+                device_mac = self._get_connected_bluetooth_device()
+                if device_mac:
+                    # Set up BlueALSA sink
+                    audiosink = Gst.ElementFactory.make("alsasink", "audiosink")
+                    if audiosink:
+                        # Set device property to use BlueALSA
+                        device = f"bluealsa:DEV={device_mac},PROFILE=a2dp"
+                        audiosink.set_property("device", device)
+                        
+                        # Configure playbin to use our sink
+                        self.playbin.set_property("audio-sink", audiosink)
+                        logger.info(f"Using BlueALSA sink for device: {device_mac}")
+                        return
+            
+            # Default: use autoaudiosink (system default)
+            audiosink = Gst.ElementFactory.make("autoaudiosink", "audiosink")
+            if audiosink:
+                self.playbin.set_property("audio-sink", audiosink)
+                logger.info("Using default audio sink")
+        except Exception as e:
+            logger.warning(f"Failed to configure audio sink: {e}")
+            logger.info("Falling back to default sink")
+    
+    def _is_bluealsa_available(self) -> bool:
+        """
+        Check if BlueALSA is available and running.
         
-        # Set up mainloop for GStreamer
-        self._main_loop = GLib.MainLoop()
-        self._thread = threading.Thread(target=self._main_loop.run)
-        self._thread.daemon = True
-        self._thread.start()
+        Returns:
+            bool: True if BlueALSA is available
+        """
+        try:
+            result = subprocess.run(
+                ["systemctl", "is-active", "bluealsa"],
+                capture_output=True,
+                text=True
+            )
+            return result.stdout.strip() == "active"
+        except Exception:
+            return False
+    
+    def _get_connected_bluetooth_device(self) -> Optional[str]:
+        """
+        Get the MAC address of the connected Bluetooth device.
         
-        # Initialize state
-        self._current_media = None
-        self._state = STATE_STOPPED
-        self._duration = -1
-        self._volume_level = 100  # 0-100 range
-        self._muted = False
-        self._prev_volume = 100
+        Returns:
+            str or None: MAC address of the connected device or None
+        """
+        try:
+            # Try using bluetoothctl to get connected devices
+            result = subprocess.run(
+                ["bluetoothctl", "info"],
+                capture_output=True,
+                text=True
+            )
+            
+            if "Connected: yes" in result.stdout:
+                # Extract MAC address from the output
+                for line in result.stdout.splitlines():
+                    if line.strip().startswith("Device "):
+                        return line.strip().split(" ")[1]
+            
+            # Alternative: check bluealsa-aplay -l output
+            result = subprocess.run(
+                ["bluealsa-aplay", "-l"],
+                capture_output=True,
+                text=True
+            )
+            
+            for line in result.stdout.splitlines():
+                if ":" in line:  # MAC addresses contain colons
+                    parts = line.split(" ")
+                    for part in parts:
+                        if ":" in part and len(part) == 17:  # Standard MAC address length
+                            return part
+            
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to get connected Bluetooth device: {e}")
+            return None
+    
+    def _on_bus_message(self, bus: Gst.Bus, message: Gst.Message) -> None:
+        """
+        Handle GStreamer bus messages.
         
-        logger.debug("AudioPlayer initialized")
-
-    def _on_pad_added(self, element, pad):
-        """Handle dynamic pad connection when decoder finds stream info."""
-        if pad.get_current_caps().to_string().startswith("audio/"):
-            if not pad.is_linked():
-                sink_pad = self._converter.get_static_pad("sink")
-                if not sink_pad.is_linked():
-                    pad.link(sink_pad)
-
-    def _on_message(self, bus, message):
-        """Handle GStreamer message bus events."""
+        Args:
+            bus: GStreamer bus
+            message: GStreamer message
+        """
         t = message.type
         
         if t == Gst.MessageType.ERROR:
             err, debug = message.parse_error()
-            logger.error(f"GStreamer error: {err} ({debug})")
+            logger.error(f"GStreamer error: {err}, {debug}")
             self.stop()
-            
+        
         elif t == Gst.MessageType.EOS:
-            logger.debug("End of stream reached")
+            logger.info("End of stream reached")
             self.stop()
-            
+        
         elif t == Gst.MessageType.STATE_CHANGED:
-            if message.src == self._pipeline:
+            if message.src == self.playbin:
                 old_state, new_state, pending_state = message.parse_state_changed()
-                logger.debug(f"Pipeline state changed from {old_state.value_nick} to {new_state.value_nick}")
                 
-                # Update internal state tracking
-                if new_state == Gst.State.PLAYING:
-                    self._state = STATE_PLAYING
-                elif new_state == Gst.State.PAUSED:
-                    self._state = STATE_PAUSED
-                elif new_state == Gst.State.NULL:
-                    self._state = STATE_STOPPED
-
-    def load_media(self, media_path):
+                # Update duration when transitioning to PAUSED or PLAYING
+                if (new_state == Gst.State.PAUSED or new_state == Gst.State.PLAYING) and self.duration < 0:
+                    self._update_duration()
+    
+    def _update_duration(self) -> None:
+        """Update the duration of the current media."""
+        success, duration = self.playbin.query_duration(Gst.Format.TIME)
+        if success:
+            self.duration = duration / Gst.SECOND
+            logger.debug(f"Media duration: {self.duration} seconds")
+    
+    def load_media(self, media_path: str) -> bool:
         """
         Load a media file for playback.
-
+        
         Args:
             media_path (str): Path to media file
-
+        
         Returns:
             bool: True if media loaded successfully
-
+        
         Raises:
             MediaLoadError: If media cannot be loaded
         """
         if not os.path.exists(media_path):
-            logger.error(f"Media file not found: {media_path}")
-            raise MediaLoadError(f"File not found: {media_path}")
+            raise MediaLoadError(f"Media file not found: {media_path}")
         
-        logger.debug(f"Loading media: {media_path}")
+        try:
+            # Stop any current playback
+            if self.is_loaded:
+                self.stop()
+            
+            # Update sink configuration (in case Bluetooth status changed)
+            self._configure_audio_sink()
+            
+            # Set the URI
+            media_uri = Gst.filename_to_uri(media_path)
+            self.playbin.set_property("uri", media_uri)
+            
+            # Reset duration
+            self.duration = -1
+            
+            # Pre-roll to PAUSED state to prepare media
+            self.playbin.set_state(Gst.State.PAUSED)
+            
+            # Wait for pre-roll to complete
+            state_change_result = self.playbin.get_state(Gst.CLOCK_TIME_NONE)
+            if state_change_result[0] != Gst.StateChangeReturn.SUCCESS:
+                raise MediaLoadError(
+                    f"Failed to pre-roll media: {state_change_result[0]}"
+                )
+            
+            # Update duration
+            self._update_duration()
+            
+            # Update state
+            self.is_loaded = True
+            self.current_media = media_path
+            
+            logger.info(f"Media loaded: {media_path}")
+            return True
         
-        # Stop any current playback
-        self.stop()
-        
-        # Set new source path
-        self._source.set_property("location", media_path)
-        self._current_media = media_path
-        
-        # Reset state
-        self._duration = -1
-        
-        # Try to get duration by loading media in paused state
-        if self._pipeline.set_state(Gst.State.PAUSED) == Gst.StateChangeReturn.FAILURE:
-            logger.error(f"Failed to load media: {media_path}")
-            self._pipeline.set_state(Gst.State.NULL)
-            raise MediaLoadError(f"Failed to load media: {media_path}")
-        
-        # Query duration (with timeout to prevent blocking)
-        start_time = time.time()
-        while self._duration < 0 and time.time() - start_time < 3.0:
-            success, duration = self._pipeline.query_duration(Gst.Format.TIME)
-            if success:
-                self._duration = duration / Gst.SECOND
-                break
-            time.sleep(0.1)
-        
-        logger.debug(f"Media loaded: {media_path} (Duration: {self._duration:.2f}s)")
-        return True
-
-    def play(self):
+        except Exception as e:
+            # Clean up on failure
+            self.playbin.set_state(Gst.State.NULL)
+            self.is_loaded = False
+            self.current_media = None
+            
+            logger.error(f"Failed to load media {media_path}: {e}")
+            raise MediaLoadError(f"Failed to load media: {e}")
+    
+    def play(self) -> bool:
         """
         Start playback of loaded media.
-
+        
         Returns:
             bool: True if playback started
+        
+        Raises:
+            AudioPlaybackError: If playback cannot be started
         """
-        if not self._current_media:
-            logger.warning("Cannot play: No media loaded")
-            return False
+        if not self.is_loaded:
+            raise AudioPlaybackError("No media loaded")
         
-        logger.debug("Starting playback")
-        result = self._pipeline.set_state(Gst.State.PLAYING)
+        try:
+            result = self.playbin.set_state(Gst.State.PLAYING)
+            if result == Gst.StateChangeReturn.FAILURE:
+                raise AudioPlaybackError("Failed to start playback")
+            
+            logger.info(f"Started playback of {self.current_media}")
+            return True
         
-        if result == Gst.StateChangeReturn.FAILURE:
-            logger.error("Failed to start playback")
-            raise AudioPlaybackError("Failed to start playback")
-        
-        self._state = STATE_PLAYING
-        return True
-
-    def pause(self):
+        except Exception as e:
+            logger.error(f"Playback error: {e}")
+            raise AudioPlaybackError(f"Playback error: {e}")
+    
+    def pause(self) -> bool:
         """
         Pause current playback.
-
+        
         Returns:
             bool: True if paused
         """
-        if self._state != STATE_PLAYING:
-            logger.warning("Cannot pause: Not currently playing")
+        if not self.is_loaded:
+            logger.warning("Cannot pause: no media loaded")
             return False
         
-        logger.debug("Pausing playback")
-        result = self._pipeline.set_state(Gst.State.PAUSED)
+        try:
+            self.playbin.set_state(Gst.State.PAUSED)
+            logger.info("Playback paused")
+            return True
         
-        if result == Gst.StateChangeReturn.FAILURE:
-            logger.error("Failed to pause playback")
-            raise AudioPlaybackError("Failed to pause playback")
-        
-        self._state = STATE_PAUSED
-        return True
-
-    def resume(self):
+        except Exception as e:
+            logger.error(f"Failed to pause: {e}")
+            return False
+    
+    def resume(self) -> bool:
         """
         Resume paused playback.
-
+        
         Returns:
             bool: True if resumed
         """
-        if self._state != STATE_PAUSED:
-            logger.warning("Cannot resume: Not currently paused")
+        if not self.is_loaded:
+            logger.warning("Cannot resume: no media loaded")
             return False
         
-        logger.debug("Resuming playback")
-        return self.play()
-
-    def stop(self):
+        # Check if currently paused
+        _, current_state, _ = self.playbin.get_state(0)
+        if current_state != Gst.State.PAUSED:
+            logger.warning("Cannot resume: not paused")
+            return False
+        
+        try:
+            self.playbin.set_state(Gst.State.PLAYING)
+            logger.info("Playback resumed")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to resume: {e}")
+            return False
+    
+    def stop(self) -> bool:
         """
         Stop current playback.
-
+        
         Returns:
             bool: True if stopped
         """
-        logger.debug("Stopping playback")
-        result = self._pipeline.set_state(Gst.State.NULL)
+        try:
+            self.playbin.set_state(Gst.State.NULL)
+            logger.info("Playback stopped")
+            return True
         
-        if result == Gst.StateChangeReturn.FAILURE:
-            logger.error("Failed to stop playback")
-            raise AudioPlaybackError("Failed to stop playback")
+        except Exception as e:
+            logger.error(f"Failed to stop: {e}")
+            return False
         
-        self._state = STATE_STOPPED
-        return True
-
-    def seek(self, position_seconds):
+        finally:
+            # Reset state regardless of success
+            self.is_loaded = False
+            self.current_media = None
+            self.duration = -1
+    
+    def seek(self, position_seconds: int) -> bool:
         """
         Seek to position in current media.
-
+        
         Args:
             position_seconds (int): Position in seconds
-
+        
         Returns:
             bool: True if seek successful
         """
-        if not self._current_media:
-            logger.warning("Cannot seek: No media loaded")
+        if not self.is_loaded:
+            logger.warning("Cannot seek: no media loaded")
             return False
         
-        # Ensure position is within valid range
-        position_seconds = max(0, min(position_seconds, self.get_duration()))
-        position_ns = position_seconds * Gst.SECOND
+        try:
+            # Convert to nanoseconds
+            position_ns = position_seconds * Gst.SECOND
+            
+            # Perform seek
+            result = self.playbin.seek_simple(
+                Gst.Format.TIME,
+                Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
+                position_ns
+            )
+            
+            if result:
+                logger.info(f"Seeked to position {position_seconds}s")
+            else:
+                logger.warning(f"Failed to seek to {position_seconds}s")
+                
+            return result
         
-        logger.debug(f"Seeking to position: {position_seconds:.2f}s")
-        
-        # Perform seek operation
-        result = self._pipeline.seek_simple(
-            Gst.Format.TIME,
-            Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
-            position_ns
-        )
-        
-        if not result:
-            logger.error(f"Failed to seek to position: {position_seconds:.2f}s")
-            raise AudioPlaybackError(f"Failed to seek to position: {position_seconds:.2f}s")
-        
-        return True
-
-    def get_position(self):
+        except Exception as e:
+            logger.error(f"Seek error: {e}")
+            return False
+    
+    def get_position(self) -> int:
         """
         Get current playback position.
-
+        
         Returns:
-            int: Current position in seconds
+            int: Current position in seconds or -1 if unknown
         """
-        if not self._current_media or self._state == STATE_STOPPED:
-            return 0
+        if not self.is_loaded:
+            return -1
         
-        success, position = self._pipeline.query_position(Gst.Format.TIME)
+        try:
+            success, position = self.playbin.query_position(Gst.Format.TIME)
+            if success:
+                return int(position / Gst.SECOND)
+            return -1
         
-        if not success:
-            logger.warning("Failed to query position")
-            return 0
-        
-        return position / Gst.SECOND
-
-    def get_duration(self):
+        except Exception:
+            return -1
+    
+    def get_duration(self) -> int:
         """
         Get loaded media duration.
-
+        
         Returns:
-            int: Duration in seconds
+            int: Duration in seconds or -1 if unknown
         """
-        if self._duration > 0:
-            return self._duration
-        
-        if not self._current_media:
-            return 0
-        
-        success, duration = self._pipeline.query_duration(Gst.Format.TIME)
-        
-        if not success:
-            logger.warning("Failed to query duration")
-            return 0
-        
-        self._duration = duration / Gst.SECOND
-        return self._duration
-
-    def set_volume(self, level):
+        if not self.is_loaded or self.duration < 0:
+            # Try to update duration
+            self._update_duration()
+            
+        return int(self.duration)
+    
+    def set_volume(self, level: int) -> int:
         """
         Set volume level.
-
+        
         Args:
             level (int): Volume level (0-100)
-
+        
         Returns:
             int: New volume level
         """
         # Ensure level is within valid range
         level = max(0, min(100, level))
         
-        # Convert to GStreamer volume (0.0 to 1.0)
-        gst_volume = level / 100.0
+        try:
+            # Convert to GStreamer volume (0.0 to 1.0)
+            volume = level / 100.0
+            self.playbin.set_property("volume", volume)
+            
+            # Update config
+            self.config["volume"] = level
+            self._save_config()
+            
+            # If we were muted, we're not anymore
+            if self.muted:
+                self.muted = False
+            
+            logger.info(f"Volume set to {level}")
+            return level
         
-        logger.debug(f"Setting volume to {level}% ({gst_volume:.2f})")
-        self._volume.set_property("volume", gst_volume)
-        
-        self._volume_level = level
-        self._muted = (level == 0)
-        
-        return level
-
-    def get_volume(self):
+        except Exception as e:
+            logger.error(f"Failed to set volume: {e}")
+            return self.get_volume()
+    
+    def get_volume(self) -> int:
         """
         Get current volume level.
-
+        
         Returns:
             int: Current volume level (0-100)
         """
-        # Get volume from GStreamer
-        gst_volume = self._volume.get_property("volume")
+        try:
+            volume = self.playbin.get_property("volume")
+            # Convert from GStreamer volume (0.0 to 1.0) to percentage
+            return int(volume * 100)
         
-        # Convert to 0-100 range
-        self._volume_level = int(gst_volume * 100)
-        
-        return self._volume_level
-
-    def mute(self):
+        except Exception:
+            return self.config.get("volume", 50)
+    
+    def mute(self) -> bool:
         """
         Mute audio output.
-
+        
         Returns:
             bool: True if muted
         """
-        if not self._muted:
-            logger.debug("Muting audio")
-            self._prev_volume = self.get_volume()
-            self.set_volume(0)
-            self._muted = True
+        if self.muted:
+            return True
         
-        return True
-
-    def unmute(self):
+        try:
+            self.previous_volume = self.get_volume()
+            self.playbin.set_property("volume", 0.0)
+            self.muted = True
+            logger.info("Audio muted")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to mute: {e}")
+            return False
+    
+    def unmute(self) -> bool:
         """
         Unmute audio output.
-
+        
         Returns:
             bool: True if unmuted
         """
-        if self._muted:
-            logger.debug(f"Unmuting audio (restoring volume to {self._prev_volume}%)")
-            self.set_volume(self._prev_volume)
-            self._muted = False
+        if not self.muted:
+            return True
         
-        return True
-
-    def get_state(self):
+        try:
+            volume = self.previous_volume / 100.0
+            self.playbin.set_property("volume", volume)
+            self.muted = False
+            logger.info("Audio unmuted")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Failed to unmute: {e}")
+            return False
+    
+    def get_state(self) -> str:
         """
         Get current playback state.
-
+        
         Returns:
             str: State ('playing', 'paused', 'stopped')
         """
-        return self._state
+        if not self.is_loaded:
+            return "stopped"
+        
+        try:
+            _, state, _ = self.playbin.get_state(0)
+            
+            if state == Gst.State.PLAYING:
+                return "playing"
+            elif state == Gst.State.PAUSED:
+                return "paused"
+            else:
+                return "stopped"
+        
+        except Exception:
+            return "stopped"
+    
+    def get_status(self) -> Dict:
+        """
+        Get complete playback status.
+        
+        Returns:
+            dict: Playback status
+        """
+        return {
+            "state": self.get_state(),
+            "position": self.get_position(),
+            "duration": self.get_duration(),
+            "volume": self.get_volume(),
+            "muted": self.muted,
+            "media": self.current_media
+        }
+    
+    def shutdown(self) -> None:
+        """Perform cleanup before shutdown."""
+        try:
+            # Stop playback
+            self.stop()
+            
+            # Save config
+            self._save_config()
+            
+            # Remove signal watch
+            self.bus.remove_signal_watch()
+            
+            logger.info("Audio player shutdown complete")
+        
+        except Exception as e:
+            logger.error(f"Error during audio player shutdown: {e}")
+
+
+def test_audio_output(device_address: str = None) -> bool:
+    """
+    Test audio output using BlueALSA.
+    
+    Args:
+        device_address (str, optional): Bluetooth device address to test.
+            If None, uses the system default audio output.
+    
+    Returns:
+        bool: True if test was successful
+    """
+    try:
+        test_file = "/usr/share/sounds/alsa/Front_Center.wav"
+        
+        # Use bluealsa-aplay if device address is provided and test file exists
+        if device_address and os.path.exists(test_file):
+            result = subprocess.run(
+                ["bluealsa-aplay", device_address, test_file],
+                capture_output=True,
+                text=True
+            )
+            return result.returncode == 0
+        
+        # Otherwise use regular aplay
+        elif os.path.exists(test_file):
+            result = subprocess.run(
+                ["aplay", test_file],
+                capture_output=True,
+                text=True
+            )
+            return result.returncode == 0
+        
+        logger.warning("Test audio file not found")
+        return False
+    
+    except Exception as e:
+        logger.error(f"Audio test failed: {e}")
+        return False

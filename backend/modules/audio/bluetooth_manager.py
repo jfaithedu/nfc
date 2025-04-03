@@ -1,268 +1,397 @@
 """
-Bluetooth manager for audio device connections.
+Bluetooth Manager for the audio module.
 
-Handles Bluetooth device discovery, connection, and management for audio devices.
-Uses D-Bus to communicate with BlueZ (Linux Bluetooth stack).
+This module handles Bluetooth device discovery, pairing, connection,
+and management using D-Bus to communicate with BlueZ.
 """
 
 import os
-import logging
-import json
 import time
+import logging
 import threading
 import subprocess
-from pathlib import Path
+import json
+from typing import List, Dict, Optional, Tuple, Any
 
 import dbus
-import dbus.mainloop.glib
+from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 
-from .exceptions import BluetoothError, BluetoothDiscoveryError, BluetoothConnectionError
+from .exceptions import (
+    BluetoothError,
+    BluetoothDiscoveryError,
+    BluetoothConnectionError
+)
 
-# Set up logger
+# Configure logging
 logger = logging.getLogger(__name__)
 
-# BlueZ D-Bus constants
-BLUEZ_SERVICE_NAME = "org.bluez"
+# D-Bus constants
+BLUEZ_SERVICE = "org.bluez"
 ADAPTER_INTERFACE = "org.bluez.Adapter1"
 DEVICE_INTERFACE = "org.bluez.Device1"
-MEDIA_TRANSPORT_INTERFACE = "org.bluez.MediaTransport1"
-MEDIA_PLAYER_INTERFACE = "org.mpris.MediaPlayer2.Player"
 PROPERTIES_INTERFACE = "org.freedesktop.DBus.Properties"
 OBJECT_MANAGER_INTERFACE = "org.freedesktop.DBus.ObjectManager"
-
-# Profiles for audio
-A2DP_SINK_UUID = "0000110b-0000-1000-8000-00805f9b34fb"  # A2DP Sink (music from device)
-A2DP_SOURCE_UUID = "0000110a-0000-1000-8000-00805f9b34fb"  # A2DP Source (music to device)
-HFP_HF_UUID = "0000111e-0000-1000-8000-00805f9b34fb"  # Hands-Free unit
 
 
 class BluetoothManager:
     """
-    Manages Bluetooth connections and device discovery.
+    Manages Bluetooth connections and device discovery using D-Bus.
     """
 
-    def __init__(self):
+    def __init__(self, adapter_path: str = None, config_path: str = None):
         """
         Initialize the Bluetooth manager.
+
+        Args:
+            adapter_path (str, optional): D-Bus path to the Bluetooth adapter. 
+                If None, the first available adapter will be used.
+            config_path (str, optional): Path to the configuration file to 
+                store paired devices. Default is ~/.bt_devices.json
         """
         # Initialize D-Bus
-        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-        self._bus = dbus.SystemBus()
+        DBusGMainLoop(set_as_default=True)
+        self.bus = dbus.SystemBus()
         
-        # Start main loop in a thread
-        self._main_loop = GLib.MainLoop()
-        self._thread = threading.Thread(target=self._main_loop.run)
-        self._thread.daemon = True
-        self._thread.start()
+        # Configuration
+        self.config_path = config_path or os.path.expanduser("~/.bt_devices.json")
         
-        # State variables
-        self._adapter = None
-        self._adapter_path = None
-        self._discovering = False
-        self._discovered_devices = {}
-        self._connected_device = None
-        self._device_connection_timeout = 30  # seconds
+        # Device tracking
+        self.devices = {}  # Discovered devices
+        self.connected_device = None  # Currently connected device
+        self.discovering = False  # Discovery state
         
-        # Storage for paired devices
-        self._config_dir = Path.home() / ".config" / "nfc-player"
-        self._paired_devices_file = self._config_dir / "paired_devices.json"
-        self._saved_devices = self._load_saved_devices()
+        # Load paired devices from config
+        self.paired_devices = self._load_paired_devices()
         
-        # Initialize adapter
-        self._find_adapter()
+        # Set up D-Bus objects
+        self._init_bluetooth_objects(adapter_path)
         
-        logger.debug("BluetoothManager initialized")
+        # Set up event loop
+        self.mainloop = GLib.MainLoop()
+        self.thread = None
 
-    def _find_adapter(self):
-        """Find and initialize the default Bluetooth adapter."""
+    def _init_bluetooth_objects(self, adapter_path: str = None) -> None:
+        """
+        Initialize D-Bus objects for BlueZ.
+
+        Args:
+            adapter_path (str, optional): D-Bus path to the Bluetooth adapter.
+                If None, the first available adapter will be used.
+        
+        Raises:
+            BluetoothError: If no Bluetooth adapter is found
+        """
         try:
             # Get object manager
-            obj_manager = dbus.Interface(
-                self._bus.get_object(BLUEZ_SERVICE_NAME, "/"),
+            self.obj_manager = dbus.Interface(
+                self.bus.get_object(BLUEZ_SERVICE, "/"),
                 OBJECT_MANAGER_INTERFACE
             )
             
-            # Get all BlueZ objects
-            objects = obj_manager.GetManagedObjects()
+            # Find the Bluetooth adapter
+            if adapter_path:
+                self.adapter_path = adapter_path
+            else:
+                # Find the first available adapter
+                self.adapter_path = self._find_adapter()
+                
+            if not self.adapter_path:
+                raise BluetoothError("No Bluetooth adapter found")
+                
+            # Get adapter object and interface
+            self.adapter = self.bus.get_object(BLUEZ_SERVICE, self.adapter_path)
+            self.adapter_props = dbus.Interface(self.adapter, PROPERTIES_INTERFACE)
+            self.adapter_interface = dbus.Interface(self.adapter, ADAPTER_INTERFACE)
             
-            # Find the first adapter
-            for path, interfaces in objects.items():
-                if ADAPTER_INTERFACE in interfaces:
-                    self._adapter_path = path
-                    self._adapter = dbus.Interface(
-                        self._bus.get_object(BLUEZ_SERVICE_NAME, path),
-                        ADAPTER_INTERFACE
-                    )
-                    logger.debug(f"Found Bluetooth adapter: {path}")
-                    
-                    # Get adapter properties
-                    adapter_props = dbus.Interface(
-                        self._bus.get_object(BLUEZ_SERVICE_NAME, path),
-                        PROPERTIES_INTERFACE
-                    )
-                    
-                    # Ensure adapter is powered on
-                    if not adapter_props.Get(ADAPTER_INTERFACE, "Powered"):
-                        adapter_props.Set(ADAPTER_INTERFACE, "Powered", dbus.Boolean(True))
-                        logger.debug("Powered on Bluetooth adapter")
-                    
-                    return True
-            
-            # No adapter found
-            logger.error("No Bluetooth adapter found")
-            return False
-            
-        except dbus.exceptions.DBusException as e:
-            logger.error(f"D-Bus error finding adapter: {str(e)}")
-            return False
+            # Register signal handlers
+            self.obj_manager.connect_to_signal(
+                "InterfacesAdded", self._interfaces_added
+            )
+            self.obj_manager.connect_to_signal(
+                "InterfacesRemoved", self._interfaces_removed
+            )
+                
+            logger.info(f"Bluetooth manager initialized with adapter: {self.adapter_path}")
+        except Exception as e:
+            logger.error(f"Failed to initialize Bluetooth: {e}")
+            raise BluetoothError(f"Failed to initialize Bluetooth: {e}")
 
-    def start_discovery(self, timeout=30):
+    def _find_adapter(self) -> Optional[str]:
+        """
+        Find the first available Bluetooth adapter.
+
+        Returns:
+            str or None: D-Bus path to the first available adapter, or None if not found
+        """
+        objects = self.obj_manager.GetManagedObjects()
+        for path, interfaces in objects.items():
+            if ADAPTER_INTERFACE in interfaces:
+                return path
+        return None
+
+    def _load_paired_devices(self) -> Dict[str, Dict]:
+        """
+        Load paired devices from configuration file.
+
+        Returns:
+            dict: Dictionary of paired devices
+        """
+        try:
+            if os.path.exists(self.config_path):
+                with open(self.config_path, 'r') as f:
+                    return json.load(f)
+            return {}
+        except Exception as e:
+            logger.warning(f"Failed to load paired devices: {e}")
+            return {}
+
+    def _save_paired_devices(self) -> None:
+        """Save paired devices to configuration file."""
+        try:
+            with open(self.config_path, 'w') as f:
+                json.dump(self.paired_devices, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to save paired devices: {e}")
+
+    def _interfaces_added(self, path: str, interfaces: Dict) -> None:
+        """
+        Handle D-Bus InterfacesAdded signal for device discovery.
+
+        Args:
+            path (str): D-Bus path to the object
+            interfaces (dict): Interface information
+        """
+        if DEVICE_INTERFACE in interfaces:
+            try:
+                properties = interfaces[DEVICE_INTERFACE]
+                device_info = self._get_device_info_from_properties(path, properties)
+                if device_info:
+                    address = device_info.get('address')
+                    if address:
+                        self.devices[address] = device_info
+                        logger.debug(f"Device discovered: {device_info}")
+            except Exception as e:
+                logger.error(f"Error processing discovered device: {e}")
+
+    def _interfaces_removed(self, path: str, interfaces: List[str]) -> None:
+        """
+        Handle D-Bus InterfacesRemoved signal.
+
+        Args:
+            path (str): D-Bus path to the object
+            interfaces (list): List of removed interfaces
+        """
+        if DEVICE_INTERFACE in interfaces:
+            for address, device in list(self.devices.items()):
+                if device.get('path') == path:
+                    del self.devices[address]
+                    logger.debug(f"Device removed: {address}")
+                    break
+
+    def _get_device_info_from_properties(
+        self, path: str, properties: Dict
+    ) -> Optional[Dict]:
+        """
+        Extract device information from D-Bus properties.
+
+        Args:
+            path (str): D-Bus path to the device
+            properties (dict): Device properties
+
+        Returns:
+            dict or None: Device information dictionary or None if invalid
+        """
+        try:
+            if 'Address' not in properties:
+                return None
+                
+            return {
+                'path': path,
+                'address': str(properties['Address']),
+                'name': str(properties.get('Name', 'Unknown')),
+                'paired': bool(properties.get('Paired', False)),
+                'trusted': bool(properties.get('Trusted', False)),
+                'connected': bool(properties.get('Connected', False)),
+                'icon': str(properties.get('Icon', '')),
+                'rssi': int(properties.get('RSSI', 0)),
+                'audio_sink': 'audio_sink' in properties.get('UUIDs', [])
+            }
+        except Exception as e:
+            logger.error(f"Error extracting device properties: {e}")
+            return None
+
+    def _run_event_loop(self) -> None:
+        """Run the GLib event loop for D-Bus signals."""
+        try:
+            self.mainloop.run()
+        except Exception as e:
+            logger.error(f"Error in Bluetooth event loop: {e}")
+
+    def _get_device_properties(self, device_path: str) -> Dict:
+        """
+        Get all properties for a Bluetooth device.
+
+        Args:
+            device_path (str): D-Bus path to the device
+
+        Returns:
+            dict: Device properties
+        """
+        device = self.bus.get_object(BLUEZ_SERVICE, device_path)
+        props_interface = dbus.Interface(device, PROPERTIES_INTERFACE)
+        return props_interface.GetAll(DEVICE_INTERFACE)
+
+    def _get_device_path(self, device_address: str) -> Optional[str]:
+        """
+        Get D-Bus path for a device by its address.
+
+        Args:
+            device_address (str): Bluetooth address of the device
+
+        Returns:
+            str or None: D-Bus path to the device or None if not found
+        """
+        # First check our cached devices
+        device = self.devices.get(device_address)
+        if device and 'path' in device:
+            return device['path']
+            
+        # If not found, query BlueZ
+        try:
+            objects = self.obj_manager.GetManagedObjects()
+            for path, interfaces in objects.items():
+                if DEVICE_INTERFACE in interfaces:
+                    properties = interfaces[DEVICE_INTERFACE]
+                    if str(properties.get('Address', '')).lower() == device_address.lower():
+                        return path
+            return None
+        except Exception as e:
+            logger.error(f"Error getting device path: {e}")
+            return None
+
+    def _find_device(self, device_address: str) -> Optional[Tuple[Any, Any]]:
+        """
+        Find a device by its address and return the device object and interface.
+
+        Args:
+            device_address (str): Bluetooth address of the device
+
+        Returns:
+            tuple or None: (device_object, device_interface) or None if not found
+        """
+        device_path = self._get_device_path(device_address)
+        if not device_path:
+            return None
+            
+        try:
+            device = self.bus.get_object(BLUEZ_SERVICE, device_path)
+            device_interface = dbus.Interface(device, DEVICE_INTERFACE)
+            return (device, device_interface)
+        except Exception as e:
+            logger.error(f"Error finding device {device_address}: {e}")
+            return None
+
+    def start_discovery(self, timeout: int = 30) -> bool:
         """
         Start discovery for Bluetooth devices.
 
         Args:
-            timeout (int, optional): Discovery timeout in seconds
+            timeout (int, optional): Discovery timeout in seconds (default: 30)
 
         Returns:
             bool: True if discovery started
+
+        Raises:
+            BluetoothDiscoveryError: If discovery cannot be started
         """
-        if not self._adapter:
-            logger.error("Cannot start discovery: No Bluetooth adapter")
-            raise BluetoothDiscoveryError("No Bluetooth adapter available")
-        
-        try:
-            # Clear previous discovery results
-            self._discovered_devices = {}
-            
-            # Register signal handlers for device discovery
-            self._bus.add_signal_receiver(
-                self._interfaces_added_handler,
-                dbus_interface=OBJECT_MANAGER_INTERFACE,
-                signal_name="InterfacesAdded"
-            )
-            self._bus.add_signal_receiver(
-                self._interfaces_removed_handler,
-                dbus_interface=OBJECT_MANAGER_INTERFACE,
-                signal_name="InterfacesRemoved"
-            )
-            self._bus.add_signal_receiver(
-                self._properties_changed_handler,
-                dbus_interface=PROPERTIES_INTERFACE,
-                signal_name="PropertiesChanged",
-                arg0=DEVICE_INTERFACE,
-                path_keyword="path"
-            )
-            
-            # Start discovery
-            self._adapter.StartDiscovery()
-            self._discovering = True
-            logger.debug("Started Bluetooth device discovery")
-            
-            # Set up timeout
-            if timeout > 0:
-                def stop_discovery_timeout():
-                    time.sleep(timeout)
-                    if self._discovering:
-                        self.stop_discovery()
-                
-                timeout_thread = threading.Thread(target=stop_discovery_timeout)
-                timeout_thread.daemon = True
-                timeout_thread.start()
-            
+        if self.discovering:
             return True
             
-        except dbus.exceptions.DBusException as e:
-            logger.error(f"Failed to start discovery: {str(e)}")
-            raise BluetoothDiscoveryError(f"Failed to start discovery: {str(e)}")
-
-    def _interfaces_added_handler(self, path, interfaces):
-        """Handle when a new device is discovered."""
-        if DEVICE_INTERFACE in interfaces:
-            self._update_device(path)
-
-    def _interfaces_removed_handler(self, path, interfaces):
-        """Handle when a device is removed."""
-        if DEVICE_INTERFACE in interfaces and path in self._discovered_devices:
-            del self._discovered_devices[path]
-            logger.debug(f"Device removed: {path}")
-
-    def _properties_changed_handler(self, interface, changed, invalidated, path):
-        """Handle when device properties change."""
-        if path.startswith(self._adapter_path) and interface == DEVICE_INTERFACE:
-            self._update_device(path)
-
-    def _update_device(self, path):
-        """Update or add a device in the discovered devices list."""
         try:
-            device_obj = self._bus.get_object(BLUEZ_SERVICE_NAME, path)
-            device_props = dbus.Interface(device_obj, PROPERTIES_INTERFACE)
+            # Clear previous devices
+            self.devices = {}
             
-            # Get device properties
-            props = device_props.GetAll(DEVICE_INTERFACE)
+            # Start device discovery
+            self.adapter_interface.StartDiscovery()
+            self.discovering = True
             
-            # Only include devices with names and audio profiles
-            if "Name" in props and "UUIDs" in props:
-                uuids = [str(uuid) for uuid in props["UUIDs"]]
+            # Start event loop in a separate thread if not already running
+            if not self.thread or not self.thread.is_alive():
+                self.thread = threading.Thread(target=self._run_event_loop)
+                self.thread.daemon = True
+                self.thread.start()
+            
+            # Set up a timer to stop discovery after timeout
+            if timeout > 0:
+                def stop_discovery_after_timeout():
+                    time.sleep(timeout)
+                    if self.discovering:
+                        self.stop_discovery()
                 
-                # Check if device supports audio profiles
-                if any(uuid in uuids for uuid in [A2DP_SINK_UUID, A2DP_SOURCE_UUID, HFP_HF_UUID]):
-                    # Create device info dictionary
-                    device_info = {
-                        "name": str(props["Name"]),
-                        "address": str(props["Address"]),
-                        "path": path,
-                        "paired": bool(props.get("Paired", False)),
-                        "trusted": bool(props.get("Trusted", False)),
-                        "connected": bool(props.get("Connected", False)),
-                        "audio_profiles": {
-                            "a2dp_sink": A2DP_SINK_UUID in uuids,
-                            "a2dp_source": A2DP_SOURCE_UUID in uuids,
-                            "hfp_hf": HFP_HF_UUID in uuids
-                        }
-                    }
-                    
-                    self._discovered_devices[path] = device_info
-                    logger.debug(f"Updated device: {device_info['name']} ({device_info['address']})")
-                    
-                    # If this is the currently connected device, update status
-                    if self._connected_device and self._connected_device["path"] == path:
-                        self._connected_device["connected"] = device_info["connected"]
-        
-        except dbus.exceptions.DBusException as e:
-            logger.error(f"Error updating device {path}: {str(e)}")
+                timer_thread = threading.Thread(target=stop_discovery_after_timeout)
+                timer_thread.daemon = True
+                timer_thread.start()
+            
+            logger.info(f"Started Bluetooth discovery (timeout: {timeout}s)")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start discovery: {e}")
+            self.discovering = False
+            raise BluetoothDiscoveryError(f"Failed to start discovery: {e}")
 
-    def get_discovered_devices(self):
-        """
-        Get list of discovered devices.
-
-        Returns:
-            list: List of device dictionaries with name, address, and type
-        """
-        return list(self._discovered_devices.values())
-
-    def stop_discovery(self):
+    def stop_discovery(self) -> bool:
         """
         Stop the discovery process.
 
         Returns:
             bool: True if discovery stopped
         """
-        if not self._adapter or not self._discovering:
-            logger.debug("Discovery not active, nothing to stop")
-            return True
-        
-        try:
-            self._adapter.StopDiscovery()
-            self._discovering = False
-            logger.debug("Stopped Bluetooth device discovery")
+        if not self.discovering:
             return True
             
-        except dbus.exceptions.DBusException as e:
-            logger.error(f"Failed to stop discovery: {str(e)}")
+        try:
+            self.adapter_interface.StopDiscovery()
+            self.discovering = False
+            logger.info("Stopped Bluetooth discovery")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to stop discovery: {e}")
             return False
 
-    def connect_device(self, device_address):
+    def get_discovered_devices(self) -> List[Dict]:
+        """
+        Get list of discovered devices.
+
+        Returns:
+            list: List of device dictionaries
+        """
+        # Update device information for all known devices
+        updated_devices = {}
+        try:
+            objects = self.obj_manager.GetManagedObjects()
+            for path, interfaces in objects.items():
+                if DEVICE_INTERFACE in interfaces:
+                    properties = interfaces[DEVICE_INTERFACE]
+                    if 'Address' in properties:
+                        address = str(properties['Address'])
+                        device_info = self._get_device_info_from_properties(path, properties)
+                        if device_info:
+                            updated_devices[address] = device_info
+        except Exception as e:
+            logger.error(f"Error updating device list: {e}")
+        
+        # Update our device cache with the latest information
+        for address, device in updated_devices.items():
+            self.devices[address] = device
+        
+        # Return as a list, sorted by name
+        return sorted(
+            list(self.devices.values()),
+            key=lambda x: x.get('name', 'Unknown').lower()
+        )
+
+    def connect_device(self, device_address: str) -> bool:
         """
         Connect to a Bluetooth device.
 
@@ -275,101 +404,181 @@ class BluetoothManager:
         Raises:
             BluetoothConnectionError: If connection fails
         """
-        # First, stop discovery if active
-        if self._discovering:
-            self.stop_discovery()
-        
-        # Find device by address
-        device_path = None
-        device_info = None
-        
-        for path, info in self._discovered_devices.items():
-            if info["address"] == device_address:
-                device_path = path
-                device_info = info
-                break
-        
-        if not device_path:
-            logger.error(f"Device not found: {device_address}")
-            raise BluetoothConnectionError(f"Device not found: {device_address}")
+        # Ensure device exists
+        device_info = self._find_device(device_address)
+        if not device_info:
+            raise BluetoothConnectionError(f"Device {device_address} not found")
+            
+        device, device_interface = device_info
         
         try:
-            device_obj = self._bus.get_object(BLUEZ_SERVICE_NAME, device_path)
-            device = dbus.Interface(device_obj, DEVICE_INTERFACE)
-            device_props = dbus.Interface(device_obj, PROPERTIES_INTERFACE)
+            # Stop discovery if active
+            if self.discovering:
+                self.stop_discovery()
             
-            # Check if already connected
-            if device_props.Get(DEVICE_INTERFACE, "Connected"):
-                logger.debug(f"Device already connected: {device_info['name']}")
-                self._connected_device = device_info
-                return True
+            # Get device properties
+            props_interface = dbus.Interface(device, PROPERTIES_INTERFACE)
+            properties = props_interface.GetAll(DEVICE_INTERFACE)
             
-            # Trust device if not trusted
-            if not device_props.Get(DEVICE_INTERFACE, "Trusted"):
-                device_props.Set(DEVICE_INTERFACE, "Trusted", dbus.Boolean(True))
-                logger.debug(f"Setting device as trusted: {device_info['name']}")
+            # Trust device if not already trusted
+            if not properties.get('Trusted', False):
+                props_interface.Set(DEVICE_INTERFACE, 'Trusted', True)
+                
+            # Pair if not already paired
+            if not properties.get('Paired', False):
+                logger.info(f"Pairing with device {device_address}...")
+                device_interface.Pair()
+                
+            # Connect to the device
+            logger.info(f"Connecting to device {device_address}...")
+            device_interface.Connect()
             
-            # Connect to device
-            logger.debug(f"Connecting to device: {device_info['name']}")
-            device.Connect()
-            
-            # Wait for connection to complete
-            start_time = time.time()
-            while time.time() - start_time < self._device_connection_timeout:
-                time.sleep(0.5)
-                if device_props.Get(DEVICE_INTERFACE, "Connected"):
-                    logger.debug(f"Successfully connected to device: {device_info['name']}")
-                    self._connected_device = device_info
+            # Wait for connection to establish
+            for _ in range(10):  # Try up to 10 times with 1s delay
+                properties = props_interface.GetAll(DEVICE_INTERFACE)
+                if properties.get('Connected', False):
+                    # Get updated device info
+                    self.connected_device = device_address
                     
-                    # Save device as paired
-                    self.save_paired_device(device_address, device_info['name'])
+                    # Save to paired devices
+                    if device_address not in self.paired_devices:
+                        self.paired_devices[device_address] = {
+                            'name': str(properties.get('Name', 'Unknown')),
+                            'address': device_address,
+                            'last_connected': time.time()
+                        }
+                        self._save_paired_devices()
                     
+                    logger.info(f"Successfully connected to {device_address}")
                     return True
-            
-            # Timeout reached without successful connection
-            logger.error(f"Connection timeout: {device_info['name']}")
-            raise BluetoothConnectionError(f"Connection timeout: {device_info['name']}")
-            
-        except dbus.exceptions.DBusException as e:
-            logger.error(f"Connection error: {str(e)}")
-            raise BluetoothConnectionError(f"Failed to connect: {str(e)}")
+                time.sleep(1)
+                
+            raise BluetoothConnectionError(
+                f"Timed out waiting for connection to {device_address}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to connect to {device_address}: {e}")
+            raise BluetoothConnectionError(f"Failed to connect to {device_address}: {e}")
 
-    def disconnect_device(self):
+    def disconnect_device(self, device_address: str = None) -> bool:
         """
-        Disconnect the current device.
+        Disconnect the current device or a specific device.
+
+        Args:
+            device_address (str, optional): Bluetooth device address to disconnect.
+                If None, disconnects the currently connected device.
 
         Returns:
             bool: True if disconnected successfully
         """
-        if not self._connected_device:
-            logger.debug("No device connected")
-            return True
+        # If no address provided, use currently connected device
+        if not device_address and self.connected_device:
+            device_address = self.connected_device
+            
+        if not device_address:
+            logger.warning("No device to disconnect")
+            return False
+            
+        # Ensure device exists
+        device_info = self._find_device(device_address)
+        if not device_info:
+            logger.warning(f"Device {device_address} not found for disconnection")
+            return False
+            
+        device, device_interface = device_info
         
         try:
-            device_obj = self._bus.get_object(BLUEZ_SERVICE_NAME, self._connected_device["path"])
-            device = dbus.Interface(device_obj, DEVICE_INTERFACE)
+            # Check if device is connected
+            props_interface = dbus.Interface(device, PROPERTIES_INTERFACE)
+            properties = props_interface.GetAll(DEVICE_INTERFACE)
             
-            logger.debug(f"Disconnecting from device: {self._connected_device['name']}")
-            device.Disconnect()
+            if not properties.get('Connected', False):
+                logger.info(f"Device {device_address} is not connected")
+                if self.connected_device == device_address:
+                    self.connected_device = None
+                return True
+                
+            # Disconnect
+            logger.info(f"Disconnecting from {device_address}...")
+            device_interface.Disconnect()
             
-            # Update state
-            self._connected_device = None
+            # Reset connected device if it was the one we disconnected
+            if self.connected_device == device_address:
+                self.connected_device = None
+                
             return True
-            
-        except dbus.exceptions.DBusException as e:
-            logger.error(f"Disconnection error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Failed to disconnect from {device_address}: {e}")
             return False
 
-    def get_connected_device(self):
+    def forget_device(self, device_address: str) -> bool:
+        """
+        Remove a paired device.
+
+        Args:
+            device_address (str): Bluetooth device address
+
+        Returns:
+            bool: True if device was forgotten
+        """
+        # Ensure device exists
+        device_info = self._find_device(device_address)
+        if not device_info:
+            logger.warning(f"Device {device_address} not found for removal")
+            return False
+            
+        device, device_interface = device_info
+        
+        try:
+            # Disconnect if connected
+            props_interface = dbus.Interface(device, PROPERTIES_INTERFACE)
+            properties = props_interface.GetAll(DEVICE_INTERFACE)
+            
+            if properties.get('Connected', False):
+                self.disconnect_device(device_address)
+                
+            # Remove device
+            self.adapter_interface.RemoveDevice(device.object_path)
+            
+            # Remove from paired devices
+            if device_address in self.paired_devices:
+                del self.paired_devices[device_address]
+                self._save_paired_devices()
+                
+            logger.info(f"Forgot device {device_address}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to forget device {device_address}: {e}")
+            return False
+
+    def get_connected_device(self) -> Optional[Dict]:
         """
         Get information about the currently connected device.
 
         Returns:
             dict or None: Device information or None if not connected
         """
-        return self._connected_device
+        if not self.connected_device:
+            return None
+            
+        device_path = self._get_device_path(self.connected_device)
+        if not device_path:
+            self.connected_device = None
+            return None
+            
+        try:
+            properties = self._get_device_properties(device_path)
+            # Verify the device is actually connected
+            if not properties.get('Connected', False):
+                self.connected_device = None
+                return None
+                
+            return self._get_device_info_from_properties(device_path, properties)
+        except Exception as e:
+            logger.error(f"Error getting connected device info: {e}")
+            return None
 
-    def is_device_connected(self, device_address=None):
+    def is_device_connected(self, device_address: str = None) -> bool:
         """
         Check if a device is connected.
 
@@ -379,70 +588,180 @@ class BluetoothManager:
         Returns:
             bool: True if device is connected
         """
-        if device_address is None:
-            return self._connected_device is not None
-        
-        if self._connected_device and self._connected_device["address"] == device_address:
-            # Refresh connection status
-            try:
-                device_obj = self._bus.get_object(BLUEZ_SERVICE_NAME, self._connected_device["path"])
-                device_props = dbus.Interface(device_obj, PROPERTIES_INTERFACE)
-                return bool(device_props.Get(DEVICE_INTERFACE, "Connected"))
-            except dbus.exceptions.DBusException:
-                return False
-        
-        return False
-
-    def _load_saved_devices(self):
-        """Load saved devices from file."""
-        if not self._paired_devices_file.exists():
-            return {}
-        
+        # If no address provided, use currently connected device
+        if not device_address:
+            return self.get_connected_device() is not None
+            
+        device_path = self._get_device_path(device_address)
+        if not device_path:
+            return False
+            
         try:
-            with open(self._paired_devices_file, 'r') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            logger.error(f"Failed to load paired devices: {str(e)}")
-            return {}
-
-    def save_paired_device(self, device_address, device_name):
-        """
-        Save a device as the preferred device.
-
-        Args:
-            device_address (str): Bluetooth device address
-            device_name (str): Human-readable device name
-
-        Returns:
-            bool: True if saved successfully
-        """
-        try:
-            # Create config directory if it doesn't exist
-            self._config_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Update saved devices
-            self._saved_devices[device_address] = {
-                "name": device_name,
-                "address": device_address,
-                "last_connected": time.time()
-            }
-            
-            # Write to file
-            with open(self._paired_devices_file, 'w') as f:
-                json.dump(self._saved_devices, f, indent=2)
-            
-            logger.debug(f"Saved paired device: {device_name} ({device_address})")
-            return True
-            
-        except (IOError, OSError) as e:
-            logger.error(f"Failed to save paired device: {str(e)}")
+            properties = self._get_device_properties(device_path)
+            return bool(properties.get('Connected', False))
+        except Exception:
             return False
 
-    def get_saved_devices(self):
+    def get_paired_devices(self) -> List[Dict]:
         """
-        Get all saved devices.
+        Get all paired devices.
 
         Returns:
-            list: List of saved device dictionaries
+            list: List of paired device dictionaries
         """
-        return list(self._saved_devices.values())
+        paired_list = []
+        
+        # Get data from BlueZ
+        try:
+            objects = self.obj_manager.GetManagedObjects()
+            for path, interfaces in objects.items():
+                if DEVICE_INTERFACE in interfaces:
+                    properties = interfaces[DEVICE_INTERFACE]
+                    if bool(properties.get('Paired', False)):
+                        device_info = self._get_device_info_from_properties(path, properties)
+                        if device_info:
+                            paired_list.append(device_info)
+        except Exception as e:
+            logger.error(f"Error getting paired devices from BlueZ: {e}")
+        
+        # Update our paired devices cache from BlueZ data
+        for device in paired_list:
+            address = device.get('address')
+            if address and address not in self.paired_devices:
+                self.paired_devices[address] = {
+                    'name': device.get('name', 'Unknown'),
+                    'address': address,
+                    'last_connected': time.time()
+                }
+        
+        self._save_paired_devices()
+        return paired_list
+
+    def reconnect_last_device(self) -> bool:
+        """
+        Attempt to reconnect to the last connected device.
+
+        Returns:
+            bool: True if reconnection was successful
+        """
+        if not self.paired_devices:
+            logger.info("No paired devices to reconnect to")
+            return False
+            
+        # Sort devices by last connected time
+        sorted_devices = sorted(
+            self.paired_devices.items(),
+            key=lambda x: x[1].get('last_connected', 0),
+            reverse=True
+        )
+        
+        # Try to connect to the most recently used device
+        for address, _ in sorted_devices:
+            try:
+                logger.info(f"Attempting to reconnect to {address}")
+                self.connect_device(address)
+                return True
+            except Exception as e:
+                logger.warning(f"Failed to reconnect to {address}: {e}")
+                continue
+                
+        return False
+
+    def get_adapter_info(self) -> Dict:
+        """
+        Get information about the Bluetooth adapter.
+
+        Returns:
+            dict: Adapter information
+        """
+        try:
+            properties = self.adapter_props.GetAll(ADAPTER_INTERFACE)
+            return {
+                'address': str(properties.get('Address', '')),
+                'name': str(properties.get('Name', '')),
+                'alias': str(properties.get('Alias', '')),
+                'powered': bool(properties.get('Powered', False)),
+                'discoverable': bool(properties.get('Discoverable', False)),
+                'pairable': bool(properties.get('Pairable', False)),
+                'discovering': bool(properties.get('Discovering', False))
+            }
+        except Exception as e:
+            logger.error(f"Error getting adapter info: {e}")
+            return {}
+
+    def set_adapter_power(self, powered: bool) -> bool:
+        """
+        Turn the Bluetooth adapter on or off.
+
+        Args:
+            powered (bool): True to power on, False to power off
+
+        Returns:
+            bool: True if operation was successful
+        """
+        try:
+            self.adapter_props.Set(ADAPTER_INTERFACE, 'Powered', dbus.Boolean(powered))
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set adapter power to {powered}: {e}")
+            return False
+
+    def shutdown(self) -> None:
+        """Clean up resources before shutdown."""
+        try:
+            if self.discovering:
+                self.stop_discovery()
+                
+            if self.mainloop and self.mainloop.is_running():
+                self.mainloop.quit()
+                
+            logger.info("Bluetooth manager shutdown complete")
+        except Exception as e:
+            logger.error(f"Error during Bluetooth manager shutdown: {e}")
+
+
+def get_bluetooth_status() -> Dict:
+    """
+    Get the current status of Bluetooth using system commands.
+    
+    This is a simple helper function that doesn't require DBus setup.
+
+    Returns:
+        dict: Bluetooth status information
+    """
+    status = {
+        'available': False,
+        'powered': False,
+        'bluealsa_running': False
+    }
+    
+    try:
+        # Check if Bluetooth service is running
+        result = subprocess.run(
+            ["systemctl", "is-active", "bluetooth"], 
+            capture_output=True, 
+            text=True
+        )
+        status['available'] = result.stdout.strip() == "active"
+        
+        # Check if adapter is powered on
+        if status['available']:
+            result = subprocess.run(
+                ["bluetoothctl", "show"], 
+                capture_output=True, 
+                text=True
+            )
+            status['powered'] = "Powered: yes" in result.stdout
+            
+        # Check BlueALSA status
+        result = subprocess.run(
+            ["systemctl", "is-active", "bluealsa"], 
+            capture_output=True, 
+            text=True
+        )
+        status['bluealsa_running'] = result.stdout.strip() == "active"
+        
+        return status
+    except Exception as e:
+        logger.error(f"Error checking Bluetooth status: {e}")
+        return status

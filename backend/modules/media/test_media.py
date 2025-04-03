@@ -1,190 +1,138 @@
+#!/usr/bin/env python3
 """
-Test script for the media module functionality.
+Test suite for the media module.
 
-This script demonstrates the key functionality of the media module, including:
-- YouTube download and playback
-- Media library management
-- Cache operations
+This script tests the functionality of the media module, including YouTube
+downloads, caching, and media preparation.
 """
 
 import os
-import sys
 import time
-from pprint import pprint
+import unittest
+import tempfile
+import shutil
+from pathlib import Path
 
-# Add the root directory to path to allow imports
-current_dir = os.path.dirname(os.path.abspath(__file__))
-root_dir = os.path.abspath(os.path.join(current_dir, '../../..'))
-sys.path.insert(0, root_dir)
+# Add parent directory to path to allow importing the modules
+import sys
+sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
-from backend import config
-config.load_config()  # Ensure config is loaded
+from backend.modules.media import media_manager
+from backend.modules.media.exceptions import MediaError
 
-import backend.modules.media as media
-from backend.modules.media.exceptions import (
-    MediaError,
-    InvalidURLError,
-    DownloadError,
-    UnsupportedFormatError
-)
-
-
-def print_divider(title):
-    """Print a section divider with title."""
-    print("\n" + "=" * 80)
-    print(f" {title} ".center(80, "="))
-    print("=" * 80 + "\n")
-
-
-def test_initialization():
-    """Test media module initialization."""
-    print_divider("Testing Media Module Initialization")
+class MediaManagerTest(unittest.TestCase):
+    """Test cases for the media_manager module."""
     
-    # Initialize the media module
-    success = media.initialize()
-    print(f"Media module initialization: {'Success' if success else 'Failed'}")
+    def setUp(self):
+        """Set up temporary directories and initialize media manager."""
+        # Create a temporary directory for testing
+        self.test_dir = tempfile.mkdtemp()
+        self.cache_dir = os.path.join(self.test_dir, 'cache')
+        
+        # Mock CONFIG for testing
+        media_manager.CONFIG = {
+            'media': {
+                'cache_dir': self.cache_dir,
+                'max_cache_size_mb': 100
+            }
+        }
+        
+        # Initialize the media manager with test config
+        self.assertTrue(media_manager.initialize())
     
-    # Check cache status
-    cache_status = media.get_cache_status()
-    print("\nInitial cache status:")
-    pprint(cache_status)
+    def tearDown(self):
+        """Clean up after tests."""
+        # Shutdown the media manager
+        media_manager.shutdown()
+        
+        # Remove the temporary directory
+        shutil.rmtree(self.test_dir)
     
-    return success
-
-
-def test_youtube_download(url):
-    """Test downloading from YouTube."""
-    print_divider(f"Testing YouTube Download: {url}")
+    def test_initialization(self):
+        """Test that the media manager initializes correctly."""
+        # Verify the cache directory was created
+        self.assertTrue(os.path.exists(self.cache_dir))
+        
+        # Verify the media manager is initialized
+        self.assertTrue(media_manager.is_initialized())
     
-    try:
-        # Add YouTube media
-        print(f"Downloading YouTube URL: {url}")
-        start_time = time.time()
-        media_id = media.add_youtube_media(url, tags=["test", "demo"])
-        download_time = time.time() - start_time
+    def test_cache_functions(self):
+        """Test cache management functions."""
+        # Test get_cache_status when cache is empty
+        status = media_manager.get_cache_status()
+        self.assertEqual(status['total_files'], 0)
+        self.assertEqual(status['total_size_bytes'], 0)
         
-        print(f"Download successful! Media ID: {media_id}")
-        print(f"Download completed in {download_time:.2f} seconds")
+        # Test get_cache_size
+        size = media_manager.get_cache_size()
+        self.assertEqual(size, 0)
         
-        # Get media info
-        media_info = media.get_media_info(media_id)
-        print("\nMedia Info:")
-        pprint(media_info)
+        # Create a test file in the cache
+        test_file = os.path.join(self.cache_dir, 'test.mp3')
+        with open(test_file, 'wb') as f:
+            f.write(b'x' * 1024)  # 1KB test file
         
-        # Prepare the media (should use cached version)
-        print("\nPreparing media for playback...")
-        file_path = media.prepare_media(media_info)
-        print(f"Media file ready at: {file_path}")
+        # Test updated cache status
+        status = media_manager.get_cache_status()
+        self.assertEqual(status['total_files'], 1)
+        self.assertGreaterEqual(status['total_size_bytes'], 1024)
         
-        # Verify file exists
-        if os.path.exists(file_path):
-            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-            print(f"File exists: {os.path.basename(file_path)} ({file_size_mb:.2f} MB)")
-        else:
-            print("ERROR: File does not exist!")
-        
-        return media_id
+        # Test clean_cache with force=True
+        result = media_manager.clean_cache(force=True)
+        self.assertEqual(result['deleted_files'], 1)
+        self.assertFalse(os.path.exists(test_file))
     
-    except InvalidURLError as e:
-        print(f"Invalid URL Error: {e}")
-    except DownloadError as e:
-        print(f"Download Error: {e}")
-    except MediaError as e:
-        print(f"Media Error: {e}")
-    except Exception as e:
-        print(f"Unexpected Error: {e}")
-    
-    return None
-
-
-def test_media_operations(media_id):
-    """Test various operations on an existing media item."""
-    print_divider(f"Testing Media Operations for ID: {media_id}")
-    
-    if not media_id:
-        print("No media ID provided, skipping tests.")
-        return
-    
-    try:
-        # Get all media
-        all_media = media.get_all_media()
-        print(f"Total media in library: {len(all_media)}")
-        
-        # Search media
-        media_info = media.get_media_info(media_id)
-        search_term = media_info.get('title', '').split()[0]  # Use first word of title
-        
-        print(f"\nSearching for term: '{search_term}'")
-        search_results = media.search_media(search_term)
-        print(f"Found {len(search_results)} results")
-        
-        # Get by tag
-        print("\nSearching for tag: 'test'")
-        tag_results = media.get_media_by_tag("test")
-        print(f"Found {len(tag_results)} results with tag 'test'")
-        
-        # Get cache status after adding media
-        cache_status = media.get_cache_status()
-        print("\nCurrent cache status:")
-        pprint(cache_status)
-        
-    except Exception as e:
-        print(f"Error during media operations: {e}")
-
-
-def test_cleanup(media_id=None):
-    """Test cleanup operations."""
-    print_divider("Testing Cleanup Operations")
-    
-    try:
-        if media_id:
-            # Remove specific media
-            print(f"Removing media: {media_id}")
-            result = media.remove_media(media_id)
-            print(f"Media removal result: {'Success' if result else 'Failed'}")
-        
-        # Get final cache status
-        cache_status = media.get_cache_status()
-        print("\nFinal cache status:")
-        pprint(cache_status)
-        
-        # Shutdown
-        print("\nShutting down media module...")
-        media.shutdown()
-        print("Shutdown complete")
-        
-    except Exception as e:
-        print(f"Error during cleanup: {e}")
-
-
-def main():
-    """Main test function."""
-    test_url = "https://www.youtube.com/watch?v=DkoTsoxEk3g"  # Default test URL
-    
-    # Allow specifying a different URL via command line
-    if len(sys.argv) > 1:
-        test_url = sys.argv[1]
-    
-    print("\n=== MEDIA MODULE TEST ===\n")
-    print(f"Using test URL: {test_url}")
-    
-    # Run tests
-    if test_initialization():
-        media_id = test_youtube_download(test_url)
-        if media_id:
-            test_media_operations(media_id)
+    def test_get_youtube_info(self):
+        """Test getting info from a YouTube URL."""
+        # This test requires internet connectivity
+        try:
+            # Use a stable test video (YouTube's own test video)
+            url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+            info = media_manager._get_youtube_info(url)
             
-            # Ask if the user wants to keep the downloaded media
-            keep_media = input("\nKeep downloaded media? (y/n): ").lower().strip()
-            if keep_media != 'y':
-                test_cleanup(media_id)
+            # Verify basic info was retrieved
+            self.assertIn('title', info)
+            self.assertIn('duration', info)
+            self.assertGreater(info['duration'], 0)
+            
+        except Exception as e:
+            # Skip test if no internet connection
+            if "Failed to get YouTube info" in str(e):
+                self.skipTest("No internet connection or YouTube API issue")
             else:
-                test_cleanup()
-        else:
-            test_cleanup()
+                raise
     
-    print("\n=== TEST COMPLETE ===\n")
+    def test_error_handling(self):
+        """Test error handling for various scenarios."""
+        # Test with invalid media_info
+        with self.assertRaises(MediaError):
+            media_manager.prepare_media(None)
+        
+        # Test with missing media_id
+        with self.assertRaises(MediaError):
+            media_manager.prepare_media({})
+        
+        # Test with invalid media_id
+        with self.assertRaises(MediaError):
+            media_manager.prepare_media({'id': 'nonexistent_id'})
+    
+    def test_media_cache_status(self):
+        """Test getting cache status for a specific media ID."""
+        # Test with non-existent media
+        status = media_manager.get_media_cache_status('nonexistent_id')
+        self.assertFalse(status['cached'])
+        
+        # Create a test file in the cache for a specific media ID
+        media_id = 'test_media_id'
+        test_file = os.path.join(self.cache_dir, f'{media_id}.mp3')
+        with open(test_file, 'wb') as f:
+            f.write(b'x' * 1024)  # 1KB test file
+        
+        # Test cache status for existing media
+        status = media_manager.get_media_cache_status(media_id)
+        self.assertTrue(status['cached'])
+        self.assertEqual(status['path'], test_file)
+        self.assertGreaterEqual(status['size_bytes'], 1024)
 
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    unittest.main()

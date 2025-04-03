@@ -21,7 +21,7 @@ from ...config import CONFIG
 from ...utils.logger import get_logger
 
 # Import routes
-from .routes import tags, media, system, nfc_writer
+from .routes import tags, media, system, nfc_writer, auth
 
 # Import middleware
 from .middleware import auth, error_handler
@@ -64,6 +64,7 @@ def initialize():
     error_handler.init_error_handlers(app)
 
     # Register route blueprints
+    auth.register_routes(app)  # Register auth routes first
     tags.register_routes(app)
     media.register_routes(app)
     system.register_routes(app)
