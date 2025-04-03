@@ -27,7 +27,7 @@ install_system_deps() {
         bluetooth \
         bluez \
         bluez-tools \
-        bluealsa \
+        bluez-alsa \
         pi-bluetooth \
         dbus \
         python3-dbus \
@@ -85,8 +85,8 @@ configure_bluetooth() {
     systemctl start bluetooth
     
     # Enable BlueALSA
-    systemctl enable bluealsa
-    systemctl start bluealsa
+    systemctl enable bluealsad
+    systemctl start bluealsad
     
     # Add current user to bluetooth group
     usermod -a -G bluetooth $SUDO_USER
