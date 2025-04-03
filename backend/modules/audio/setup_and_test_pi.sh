@@ -27,7 +27,6 @@ install_system_deps() {
         bluetooth \
         bluez \
         bluez-tools \
-        bluez-alsa \
         pi-bluetooth \
         dbus \
         python3-dbus \
@@ -55,7 +54,70 @@ install_system_deps() {
         python3-setuptools \
         python3-venv
     
+    # Install build dependencies for bluez-alsa
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        git \
+        automake \
+        libtool \
+        pkg-config \
+        libasound2-dev \
+        libbluetooth-dev \
+        libdbus-1-dev \
+        libglib2.0-dev \
+        libsbc-dev \
+        libfdk-aac-dev || true  # Optional, may not be available
+
     echo "System dependencies installed."
+    
+    # Install bluez-alsa from source
+    install_bluez_alsa_from_source
+}
+
+# Function to install bluez-alsa from source
+install_bluez_alsa_from_source() {
+    echo "=== Installing BlueALSA from source ==="
+    
+    local TMP_DIR=$(mktemp -d)
+    cd "$TMP_DIR"
+    
+    # Clone the repository
+    git clone https://github.com/Arkq/bluez-alsa.git
+    cd bluez-alsa
+    
+    # Configure and build
+    autoreconf --install
+    mkdir build && cd build
+    ../configure --enable-aac --enable-ofono
+    make
+    make install
+    
+    # Update library cache
+    ldconfig
+    
+    # Create service file if it doesn't exist
+    if [ ! -f /etc/systemd/system/bluealsad.service ]; then
+        cat > /etc/systemd/system/bluealsad.service << EOF
+[Unit]
+Description=BlueALSA service
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/bluealsad -p a2dp-sink -p a2dp-source
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    fi
+    
+    # Clean up
+    cd ~
+    rm -rf "$TMP_DIR"
+    
+    echo "BlueALSA installed from source"
 }
 
 # Function to setup Python virtual environment and install dependencies
@@ -85,6 +147,7 @@ configure_bluetooth() {
     systemctl start bluetooth
     
     # Enable BlueALSA
+    systemctl daemon-reload
     systemctl enable bluealsad
     systemctl start bluealsad
     

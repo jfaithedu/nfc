@@ -22,30 +22,81 @@ The audio module has been updated to use `bluez-alsa` instead of `bluealsa`. Thi
 
 ## Installation
 
-The setup script (`setup_and_test_pi.sh`) has been updated to use the correct package names and service names. When you run the setup script, it will:
+The setup script (`setup_and_test_pi.sh`) has been updated to install BlueALSA from source code since the package may not be available in all Ubuntu repositories. When you run the setup script, it will:
 
-1. Install the `bluez-alsa` package instead of `bluealsa`
-2. Configure the system service as `bluealsad` instead of `bluealsa`
+1. Install the necessary build dependencies
+2. Clone and build the BlueALSA source from GitHub
+3. Install the compiled software
+4. Create and configure the system service as `bluealsad`
+
+### Manual Installation
+
+If you need to manually install BlueALSA, follow these steps:
+
+```bash
+# Install build dependencies
+sudo apt-get install -y build-essential git automake libtool pkg-config \
+  libasound2-dev libbluetooth-dev libdbus-1-dev libglib2.0-dev libsbc-dev
+
+# Clone repository
+git clone https://github.com/Arkq/bluez-alsa.git
+cd bluez-alsa
+
+# Build and install
+autoreconf --install
+mkdir build && cd build
+../configure --enable-aac
+make
+sudo make install
+
+# Create service file
+sudo bash -c 'cat > /etc/systemd/system/bluealsad.service << EOF
+[Unit]
+Description=BlueALSA service
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/bluealsad -p a2dp-sink -p a2dp-source
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF'
+
+# Enable and start the service
+sudo systemctl daemon-reload
+sudo systemctl enable bluealsad
+sudo systemctl start bluealsad
+```
 
 ## Troubleshooting
 
 If you encounter issues:
 
-1. Make sure the correct package is installed:
-
-   ```
-   sudo apt-get install bluez-alsa
-   ```
-
-2. Check if the service is running:
+1. Check if the service is running:
 
    ```
    systemctl status bluealsad
    ```
 
-3. Restart the service if needed:
+2. Restart the service if needed:
+
    ```
    sudo systemctl restart bluealsad
+   ```
+
+3. Check build logs if compilation failed:
+
+   ```
+   cd /tmp/*/bluez-alsa/build
+   cat config.log
+   ```
+
+4. Verify that the BlueALSA daemon is available:
+   ```
+   which bluealsad
    ```
 
 ## Further Information
