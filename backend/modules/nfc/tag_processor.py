@@ -106,6 +106,34 @@ def parse_ndef_data(data):
             'records': []
         }
         
+        # Special handling for NTAG215 tags
+        # NTAG215 tags use Type 2 Tag format with a specific TLV structure:
+        # - Byte 0: TLV Tag (0x03 for NDEF)
+        # - Byte 1: TLV Length
+        # - Bytes 2+: NDEF Message
+
+        # Check for Type 2 Tag structure (common for NTAG215)
+        if data[0] == 0x03:  # Type 2 Tag, NDEF Message TLV
+            # Parse TLV structure
+            tlv_type = data[0]
+            tlv_length = data[1]
+            
+            # If we find a valid NDEF TLV block
+            if tlv_type == 0x03 and tlv_length > 0 and len(data) >= tlv_length + 2:
+                # Extract the NDEF message from the TLV
+                ndef_data = data[2:2+tlv_length]
+                
+                # Now process the NDEF message
+                data = ndef_data
+            
+        # Check for NTAG215 common format where the first byte is the NDEF message length
+        elif len(data) > 2 and data[0] > 0 and data[0] < len(data) and data[1] in [0x01, 0x03, 0xD1]:
+            # This might be an NTAG215 with the message length as the first byte
+            message_length = data[0]
+            if message_length < len(data):
+                # Extract the actual NDEF message
+                data = data[1:1+message_length]
+        
         offset = 0
         
         # Process each record in the NDEF message
@@ -117,6 +145,31 @@ def parse_ndef_data(data):
             # Parse header byte
             header = data[offset]
             offset += 1
+            
+            # Check if this is terminative TLV (0xFE)
+            if header == 0xFE:
+                # End of NDEF message, finished processing
+                break
+                
+            # Check if this is null TLV (0x00), just skip it and continue
+            if header == 0x00:
+                continue
+                
+            # If not a standard NDEF record header, we might be dealing with a non-standard format
+            if header not in [0x03, 0xD1, 0x91, 0x51, 0x11, 0x01]:  # Common NDEF header values
+                # Try to reset and scan for a valid NDEF header
+                found_header = False
+                for i in range(offset, min(offset + 10, len(data))):
+                    if data[i] in [0x03, 0xD1, 0x91, 0x51, 0x11, 0x01]:
+                        offset = i
+                        header = data[offset]
+                        offset += 1
+                        found_header = True
+                        break
+                
+                if not found_header:
+                    # No valid header found, stop processing
+                    break
             
             mb = (header & 0x80) != 0  # Message Begin
             me = (header & 0x40) != 0  # Message End
@@ -306,12 +359,24 @@ def create_ndef_data(url=None, text=None):
             raise NFCError(f"Failed to create Text record: {str(e)}")
     
     # Combine all records into a single message
-    message = b''.join(records)
+    ndef_message = b''.join(records)
+    
+    # For NTAG215, we need to create proper Type 2 Tag structure with TLV format
+    # This is a simple Type 2 Tag TLV structure used by NTAG215
+    tlv_type = bytes([0x03])  # NDEF Message TLV
+    tlv_length = bytes([len(ndef_message)])  # Length of the NDEF message
+    
+    # Combine into TLV format
+    tlv_data = tlv_type + tlv_length + ndef_message
+    
+    # Add a terminator TLV if needed
+    if len(tlv_data) < 16:  # If there's room in the first block
+        tlv_data += bytes([0xFE])  # Terminator TLV
     
     # Ensure it fits into a 16-byte block (or multiple blocks)
     # Pad with zeros if needed
-    if len(message) % 16 != 0:
-        padding_bytes = 16 - (len(message) % 16)
-        message += b'\x00' * padding_bytes
+    if len(tlv_data) % 16 != 0:
+        padding_bytes = 16 - (len(tlv_data) % 16)
+        tlv_data += b'\x00' * padding_bytes
     
-    return message
+    return tlv_data
