@@ -14,8 +14,9 @@ from .nfc_controller import (
     write_tag_data,
     get_hardware_info,
     authenticate_tag,
-    read_ndef_data,
-    write_ndef_data,
+    # read_ndef_data, # Removed, integrated into poll_for_tag
+    # write_ndef_data, # Removed, replaced by write_ndef_uri
+    write_ndef_uri,  # Added new function
     continuous_poll
 )
 
@@ -26,7 +27,8 @@ from .exceptions import (
     NFCNoTagError,
     NFCReadError,
     NFCWriteError,
-    NFCAuthenticationError
+    NFCAuthenticationError,
+    NFCTagNotWritableError
 )
 
 __all__ = [
@@ -38,15 +40,17 @@ __all__ = [
     'write_tag_data',
     'get_hardware_info',
     'authenticate_tag',
-    'read_ndef_data',
-    'write_ndef_data',
+    # 'read_ndef_data', # Removed
+    # 'write_ndef_data', # Removed
+    'write_ndef_uri', # Added
     'continuous_poll',
-    
+
     # Exceptions
     'NFCError',
     'NFCHardwareError',
     'NFCNoTagError',
     'NFCReadError',
     'NFCWriteError',
-    'NFCAuthenticationError'
+    'NFCAuthenticationError',
+    'NFCTagNotWritableError'
 ]

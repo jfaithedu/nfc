@@ -7,7 +7,10 @@ import threading
 import time
 from .hardware_interface import NFCReader
 from .tag_processor import format_uid, parse_ndef_data, create_ndef_data
-from .exceptions import NFCError, NFCNoTagError, NFCReadError, NFCWriteError, NFCHardwareError
+from .exceptions import (
+    NFCError, NFCNoTagError, NFCReadError, NFCWriteError, NFCHardwareError,
+    NFCTagNotWritableError
+)
 
 # Create logger
 logger = logging.getLogger(__name__)
@@ -76,35 +79,117 @@ def shutdown():
             finally:
                 _nfc_reader = None
 
+def _read_ndef_data_internal():
+    """Internal helper to read and parse NDEF data, handling potential errors."""
+    try:
+        # NDEF data typically starts at block 4, but may span multiple blocks
+        # Read first block to determine TLV length
+        data = read_tag_data(4) # Use the existing read_tag_data which reads one block
+        
+        # Check for TLV structure to determine total length
+        if len(data) >= 2 and data[0] == 0x03:  # NDEF Message TLV
+            start_offset = 2
+            if data[1] == 0xFF and len(data) >= 4: # 3-byte length format
+                tlv_length = int.from_bytes(data[2:4], byteorder='big')
+                start_offset = 4
+            else: # 1-byte length format
+                tlv_length = data[1]
+
+            total_bytes_needed = tlv_length + start_offset
+            
+            # If data spans multiple blocks, read additional blocks
+            if total_bytes_needed > 16:
+                num_blocks_to_read = (total_bytes_needed + 15) // 16 # Total blocks needed
+                # Read additional blocks and append data
+                for i in range(1, num_blocks_to_read):
+                    block_num = 4 + i
+                    try:
+                        additional_data = read_tag_data(block_num)
+                        data += additional_data
+                    except NFCReadError as block_e:
+                        logger.warning(f"Could not read additional NDEF block {block_num}: {str(block_e)}")
+                        # Return partial data if possible, or None if critical read failed
+                        break # Stop reading further blocks
+                    except NFCNoTagError:
+                        logger.warning(f"Tag removed while reading NDEF block {block_num}")
+                        raise # Propagate NoTagError
+                    except Exception as block_e:
+                         logger.error(f"Unexpected error reading NDEF block {block_num}: {str(block_e)}")
+                         break # Stop reading further blocks
+
+                logger.debug(f"Read {len(data)} bytes of NDEF data across {num_blocks_to_read} blocks")
+        
+        # Parse NDEF data
+        ndef_info = parse_ndef_data(data)
+        if not ndef_info:
+            logger.info("No valid NDEF data found on tag")
+            return None
+            
+        # Extract relevant info (e.g., first URI record)
+        uri_info = None
+        for record in ndef_info.get('records', []):
+            if record.get('decoded', {}).get('type') == 'uri':
+                uri_info = record['decoded']
+                logger.info(f"Found NDEF URI record: {uri_info.get('uri')}")
+                break # Return the first URI found for now
+        
+        return uri_info # Return the decoded URI info dict or None
+
+    except NFCNoTagError:
+        logger.debug("No tag present while attempting to read NDEF data.")
+        raise # Re-raise to be handled by caller
+    except NFCReadError as e:
+        logger.warning(f"NFC Read Error while reading NDEF data: {str(e)}")
+        return None # Treat read errors as no NDEF data found
+    except Exception as e:
+        logger.error(f"Unexpected error reading NDEF data: {str(e)}")
+        return None # Treat other errors as no NDEF data found
+
+
 def poll_for_tag():
     """
-    Check for presence of an NFC tag.
+    Check for presence of an NFC tag and attempt to read NDEF URI data.
     
     Returns:
-        str or None: Tag UID if detected, None otherwise
+        tuple (str, dict) or (None, None): 
+            - Tag UID string if detected, None otherwise.
+            - NDEF info dict (e.g., {'type': 'uri', 'uri': '...'}) if URI found, None otherwise.
     """
     global _nfc_reader
     
     with _reader_lock:
         if not _nfc_reader:
             logger.error("NFC controller not initialized")
-            return None
+            return None, None
         
+        uid = None
+        ndef_info = None
         try:
             # Poll for tag
             raw_uid = _nfc_reader.poll()
             
-            # Format and return UID if found
+            # If tag found, format UID and try reading NDEF
             if raw_uid:
                 uid = format_uid(raw_uid)
-                logger.debug(f"NFC tag detected: {uid}")
-                return uid
-                
-            return None
+                logger.debug(f"NFC tag detected: {uid}. Attempting to read NDEF data.")
+                try:
+                    # Attempt to read NDEF data immediately after detection
+                    ndef_info = _read_ndef_data_internal()
+                except NFCNoTagError:
+                    # Tag might have been removed between poll and NDEF read attempt
+                    logger.warning("Tag removed before NDEF read could complete.")
+                    # Return UID but no NDEF info
+                    return uid, None
+                except Exception as ndef_e:
+                    # Log other errors during NDEF read but don't fail the poll
+                    logger.error(f"Error reading NDEF data after polling: {ndef_e}")
+                    ndef_info = None
+
+            return uid, ndef_info # Return UID and NDEF info (which might be None)
             
         except Exception as e:
             logger.error(f"Error polling for NFC tag: {str(e)}")
-            return None
+            return None, None
 
 def read_tag_data(block=4):
     """
@@ -253,6 +338,94 @@ def write_tag_data(data, block=4, verify=True, max_retries=3):
             logger.error(error_msg)
             raise NFCWriteError(error_msg)
 
+
+def write_ndef_uri(uri: str):
+    """
+    Write an NDEF URI record to the currently present tag.
+
+    Args:
+        uri (str): The URI to write.
+
+    Returns:
+        bool: True if write successful, False otherwise.
+
+    Raises:
+        NFCNoTagError: If no tag is present during the operation.
+        NFCTagNotWritableError: If the tag is read-only or cannot be written to.
+        NFCWriteError: For other write-related failures.
+        NFCHardwareError: If the controller is not initialized.
+    """
+    global _nfc_reader
+
+    with _reader_lock:
+        if not _nfc_reader:
+            error_msg = "NFC controller not initialized"
+            logger.error(error_msg)
+            raise NFCHardwareError(error_msg)
+
+        # Ensure a tag is present before attempting to write
+        if not _nfc_reader._last_tag_uid:
+             # Try polling once more to be sure
+            if not poll_for_tag()[0]: # Check only UID part of the tuple
+                raise NFCNoTagError("No NFC tag detected to write NDEF URI to")
+
+        logger.info(f"Attempting to write NDEF URI: {uri}")
+        try:
+            # Create NDEF formatted data (including TLV and padding)
+            ndef_data_bytes = create_ndef_data(url=uri)
+            logger.debug(f"Generated NDEF data ({len(ndef_data_bytes)} bytes): {ndef_data_bytes.hex()}")
+
+            # Check if tag is writable *before* attempting write
+            # Note: is_tag_read_only might attempt a test write itself.
+            if _nfc_reader.is_tag_read_only():
+                 logger.error("Tag is read-only or write-protected. Cannot write NDEF data.")
+                 raise NFCTagNotWritableError("Tag is read-only or write-protected")
+
+            # Write data to tag starting at block 4
+            # The write_tag_data function handles 16-byte blocks.
+            num_blocks = (len(ndef_data_bytes) + 15) // 16
+            logger.info(f"Writing {len(ndef_data_bytes)} bytes ({num_blocks} blocks) starting at block 4...")
+
+            for i in range(num_blocks):
+                start_index = i * 16
+                end_index = start_index + 16
+                block_data = ndef_data_bytes[start_index:end_index]
+                block_num = 4 + i
+
+                # Pad the last block if necessary (should already be padded by create_ndef_data)
+                if len(block_data) < 16:
+                    block_data = block_data.ljust(16, b'\x00')
+
+                logger.debug(f"Writing block {block_num} with data: {block_data.hex()}")
+                # Use write_tag_data with verify=True by default
+                if not write_tag_data(block_data, block_num, verify=True):
+                    # write_tag_data already logs errors and raises exceptions on failure after retries
+                    # If it returns False unexpectedly (should raise), log it.
+                    logger.error(f"write_tag_data returned False for block {block_num}, expected exception on failure.")
+                    raise NFCWriteError(f"Failed to write block {block_num} during NDEF write operation")
+
+            logger.info(f"Successfully wrote NDEF URI '{uri}' to tag.")
+            return True
+
+        except NFCNoTagError:
+            logger.error("Tag removed during NDEF write operation.")
+            raise # Re-raise
+        except NFCTagNotWritableError as e:
+             logger.error(f"Cannot write NDEF URI: {str(e)}")
+             raise # Re-raise specific error
+        except NFCWriteError as e:
+            logger.error(f"Failed to write NDEF URI: {str(e)}")
+            # Don't re-raise generic NFCWriteError here if NFCTagNotWritableError was the cause
+            # But if it's another write error, let it propagate.
+            if not isinstance(e, NFCTagNotWritableError):
+                 raise
+            return False # Return False for NFCTagNotWritableError after logging
+        except Exception as e:
+            logger.error(f"Unexpected error writing NDEF URI: {str(e)}")
+            # Raise a generic NFCWriteError for unexpected issues
+            raise NFCWriteError(f"Unexpected error writing NDEF URI: {str(e)}")
+
+
 def get_hardware_info():
     """
     Get information about the NFC hardware.
@@ -324,89 +497,10 @@ def authenticate_tag(block, key_type='A', key=b'\xFF\xFF\xFF\xFF\xFF\xFF'):
             logger.error(f"Authentication error: {str(e)}")
             raise
 
-def read_ndef_data():
-    """
-    Read and parse NDEF formatted data from tag.
-    
-    Returns:
-        dict: Parsed NDEF message and records
-        
-    Raises:
-        NFCReadError: If reading fails
-        NFCNoTagError: If no tag is present
-    """
-    try:
-        # NDEF data typically starts at block 4, but may span multiple blocks
-        # Read first block to determine TLV length
-        data = read_tag_data(4)
-        
-        # Check for TLV structure to determine total length
-        if len(data) >= 2 and data[0] == 0x03:  # NDEF Message TLV
-            tlv_length = data[1]
-            total_bytes_needed = tlv_length + 2  # TLV type + length bytes + payload
-            
-            # If data spans multiple blocks, read additional blocks
-            if total_bytes_needed > 16:
-                # Calculate how many additional blocks we need
-                additional_blocks = (total_bytes_needed - 16 + 15) // 16  # Ceiling division
-                
-                # Read additional blocks and append data
-                for i in range(1, additional_blocks + 1):
-                    try:
-                        additional_data = read_tag_data(4 + i)
-                        data += additional_data
-                    except Exception as block_e:
-                        logger.warning(f"Could not read additional NDEF block {4+i}: {str(block_e)}")
-                        break
-                        
-                logger.debug(f"Read {len(data)} bytes of NDEF data across {additional_blocks + 1} blocks")
-        
-        # Parse NDEF data
-        ndef_data = parse_ndef_data(data)
-        if not ndef_data:
-            logger.warning("No valid NDEF data found on tag")
-            return None
-            
-        return ndef_data
-        
-    except Exception as e:
-        logger.error(f"Error reading NDEF data: {str(e)}")
-        raise
 
-def write_ndef_data(url=None, text=None):
-    """
-    Write NDEF formatted data to tag.
-    
-    Args:
-        url (str, optional): URL to encode
-        text (str, optional): Text to encode
-        
-    Returns:
-        bool: True if successful
-        
-    Raises:
-        NFCWriteError: If writing fails
-        NFCNoTagError: If no tag is present
-    """
-    try:
-        # Create NDEF formatted data
-        ndef_data = create_ndef_data(url=url, text=text)
-        
-        # Write data to tag (NDEF typically starts at block 4)
-        # We may need multiple blocks for longer data
-        for i in range(0, len(ndef_data), 16):
-            block_data = ndef_data[i:i+16]
-            block_num = 4 + (i // 16)
-            
-            # Write block
-            write_tag_data(block_data, block_num)
-            
-        logger.info("Successfully wrote NDEF data to tag")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Error writing NDEF data: {str(e)}")
-        raise
+# Note: The old read_ndef_data and write_ndef_data functions are removed
+# as per the plan. NDEF reading is now part of poll_for_tag,
+# and writing is handled by write_ndef_uri.
 
 def continuous_poll(callback, interval=0.1, exit_event=None):
     """
