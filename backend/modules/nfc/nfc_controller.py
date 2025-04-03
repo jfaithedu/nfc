@@ -76,12 +76,18 @@ def shutdown():
             finally:
                 _nfc_reader = None
 
-def poll_for_tag():
+def poll_for_tag(read_ndef=False):
     """
-    Check for presence of an NFC tag.
+    Check for presence of an NFC tag and optionally read NDEF data.
+    
+    Args:
+        read_ndef (bool): Whether to attempt to read NDEF data from the tag
     
     Returns:
-        str or None: Tag UID if detected, None otherwise
+        tuple or str or None: 
+            - If read_ndef=True and successful: (uid_str, ndef_data)
+            - If read_ndef=True but no NDEF data: (uid_str, None)
+            - If read_ndef=False: uid_str if tag found, None otherwise
     """
     global _nfc_reader
     
@@ -94,13 +100,29 @@ def poll_for_tag():
             # Poll for tag
             raw_uid = _nfc_reader.poll()
             
-            # Format and return UID if found
-            if raw_uid:
-                uid = format_uid(raw_uid)
-                logger.debug(f"NFC tag detected: {uid}")
+            # Return None if no tag found
+            if not raw_uid:
+                return None
+            
+            # Format UID
+            uid = format_uid(raw_uid)
+            logger.debug(f"NFC tag detected: {uid}")
+            
+            # If we don't need to read NDEF data, just return the UID
+            if not read_ndef:
                 return uid
-                
-            return None
+            
+            # Attempt to read NDEF data from the tag
+            ndef_data = None
+            try:
+                ndef_data = _read_ndef_data_internal()
+                if ndef_data:
+                    logger.debug(f"Read NDEF data during polling: {len(ndef_data['records'])} records")
+            except Exception as e:
+                logger.debug(f"Unable to read NDEF data during polling: {str(e)}")
+            
+            # Return tuple of UID and NDEF data (which may be None)
+            return (uid, ndef_data)
             
         except Exception as e:
             logger.error(f"Error polling for NFC tag: {str(e)}")
@@ -324,6 +346,56 @@ def authenticate_tag(block, key_type='A', key=b'\xFF\xFF\xFF\xFF\xFF\xFF'):
             logger.error(f"Authentication error: {str(e)}")
             raise
 
+def _read_ndef_data_internal():
+    """
+    Internal helper function to read NDEF data from a tag.
+    This is used by poll_for_tag and read_ndef_data.
+    
+    Returns:
+        dict: Parsed NDEF message and records or None if no valid NDEF data
+        
+    Raises:
+        NFCReadError: If reading fails
+        NFCNoTagError: If no tag is present
+    """
+    # NDEF data typically starts at block 4, but may span multiple blocks
+    # Read first block to determine TLV length
+    data = read_tag_data(4)
+    
+    # Check for TLV structure to determine total length
+    if len(data) >= 2 and data[0] == 0x03:  # NDEF Message TLV
+        # Check for 3-byte length format
+        if data[1] == 0xFF and len(data) >= 4:
+            tlv_length = int.from_bytes(data[2:4], byteorder='big')
+            total_bytes_needed = tlv_length + 4  # TLV type + 3-byte length + payload
+        else:
+            tlv_length = data[1]
+            total_bytes_needed = tlv_length + 2  # TLV type + length byte + payload
+        
+        # If data spans multiple blocks, read additional blocks
+        if total_bytes_needed > 16:
+            # Calculate how many additional blocks we need
+            additional_blocks = (total_bytes_needed - 16 + 15) // 16  # Ceiling division
+            
+            # Read additional blocks and append data
+            for i in range(1, additional_blocks + 1):
+                try:
+                    additional_data = read_tag_data(4 + i)
+                    data += additional_data
+                except Exception as block_e:
+                    logger.warning(f"Could not read additional NDEF block {4+i}: {str(block_e)}")
+                    break
+                    
+            logger.debug(f"Read {len(data)} bytes of NDEF data across {additional_blocks + 1} blocks")
+    
+    # Parse NDEF data
+    ndef_data = parse_ndef_data(data)
+    if not ndef_data:
+        logger.debug("No valid NDEF data found on tag")
+        return None
+        
+    return ndef_data
+
 def read_ndef_data():
     """
     Read and parse NDEF formatted data from tag.
@@ -336,41 +408,41 @@ def read_ndef_data():
         NFCNoTagError: If no tag is present
     """
     try:
-        # NDEF data typically starts at block 4, but may span multiple blocks
-        # Read first block to determine TLV length
-        data = read_tag_data(4)
-        
-        # Check for TLV structure to determine total length
-        if len(data) >= 2 and data[0] == 0x03:  # NDEF Message TLV
-            tlv_length = data[1]
-            total_bytes_needed = tlv_length + 2  # TLV type + length bytes + payload
-            
-            # If data spans multiple blocks, read additional blocks
-            if total_bytes_needed > 16:
-                # Calculate how many additional blocks we need
-                additional_blocks = (total_bytes_needed - 16 + 15) // 16  # Ceiling division
-                
-                # Read additional blocks and append data
-                for i in range(1, additional_blocks + 1):
-                    try:
-                        additional_data = read_tag_data(4 + i)
-                        data += additional_data
-                    except Exception as block_e:
-                        logger.warning(f"Could not read additional NDEF block {4+i}: {str(block_e)}")
-                        break
-                        
-                logger.debug(f"Read {len(data)} bytes of NDEF data across {additional_blocks + 1} blocks")
-        
-        # Parse NDEF data
-        ndef_data = parse_ndef_data(data)
+        ndef_data = _read_ndef_data_internal()
         if not ndef_data:
             logger.warning("No valid NDEF data found on tag")
-            return None
-            
         return ndef_data
-        
     except Exception as e:
         logger.error(f"Error reading NDEF data: {str(e)}")
+        raise
+
+def write_ndef_uri(uri):
+    """
+    Write a URI record to an NFC tag. This is specialized for URLs like YouTube or Music links.
+    
+    Args:
+        uri (str): The URI to write (e.g., 'https://youtube.com/watch?v=...')
+        
+    Returns:
+        bool: True if successful
+        
+    Raises:
+        NFCWriteError: If writing fails
+        NFCNoTagError: If no tag is present
+        NFCTagNotWritableError: If tag is read-only or incorrectly formatted
+    """
+    if not uri:
+        raise ValueError("URI cannot be empty")
+        
+    # Validate URI format (basic check)
+    if not (uri.startswith('http://') or uri.startswith('https://')):
+        logger.warning(f"URI does not start with http:// or https://: {uri}")
+    
+    try:
+        # Use the general NDEF writing function but specify only the URL
+        return write_ndef_data(url=uri)
+    except Exception as e:
+        logger.error(f"Error writing URI to tag: {str(e)}")
         raise
 
 def write_ndef_data(url=None, text=None):
@@ -387,6 +459,7 @@ def write_ndef_data(url=None, text=None):
     Raises:
         NFCWriteError: If writing fails
         NFCNoTagError: If no tag is present
+        NFCTagNotWritableError: If tag is read-only or incorrectly formatted
     """
     try:
         # Create NDEF formatted data
@@ -408,15 +481,17 @@ def write_ndef_data(url=None, text=None):
         logger.error(f"Error writing NDEF data: {str(e)}")
         raise
 
-def continuous_poll(callback, interval=0.1, exit_event=None):
+def continuous_poll(callback, interval=0.1, exit_event=None, read_ndef=False):
     """
     Continuously poll for NFC tags and call the callback function when detected.
     
     Args:
-        callback (function): Function to call when tag is detected
-                             Will be called with the UID string as parameter
+        callback (function): Function to call when tag is detected.
+                             If read_ndef is False: Called with UID string parameter
+                             If read_ndef is True: Called with (UID string, NDEF data) tuple
         interval (float): Polling interval in seconds
         exit_event (threading.Event, optional): Event to signal when to stop polling
+        read_ndef (bool): Whether to read NDEF data from detected tags
         
     Note:
         This function runs in a loop and is typically called in a separate thread.
@@ -425,29 +500,41 @@ def continuous_poll(callback, interval=0.1, exit_event=None):
     if exit_event is None:
         exit_event = threading.Event()
     
-    logger.info(f"Starting continuous polling with interval {interval}s")
+    logger.info(f"Starting continuous polling with interval {interval}s, read_ndef={read_ndef}")
     
     try:
         while not exit_event.is_set():
             try:
-                # Poll for tag
-                uid = poll_for_tag()
+                # Poll for tag (with or without NDEF data)
+                result = poll_for_tag(read_ndef=read_ndef)
+                
+                # If no tag detected
+                if not result:
+                    last_uid = None
+                    time.sleep(interval)
+                    continue
+                
+                # Extract UID (and possibly NDEF data) from result
+                if read_ndef:
+                    uid, ndef_data = result
+                else:
+                    uid = result
+                    ndef_data = None
                 
                 # If tag detected and it's different from last time
                 if uid and uid != last_uid:
-                    # Call callback with UID
+                    # Call callback with appropriate parameters
                     try:
-                        callback(uid)
+                        if read_ndef:
+                            callback(uid, ndef_data)
+                        else:
+                            callback(uid)
                     except Exception as e:
                         logger.error(f"Error in tag detection callback: {str(e)}")
                     
                     # Update last seen UID
                     last_uid = uid
-                    
-                # If no tag detected, reset last UID
-                elif not uid:
-                    last_uid = None
-                    
+                
                 # Wait for next poll
                 time.sleep(interval)
                 

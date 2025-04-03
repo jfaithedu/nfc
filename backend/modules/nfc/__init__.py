@@ -16,6 +16,7 @@ from .nfc_controller import (
     authenticate_tag,
     read_ndef_data,
     write_ndef_data,
+    write_ndef_uri,
     continuous_poll
 )
 
@@ -26,7 +27,8 @@ from .exceptions import (
     NFCNoTagError,
     NFCReadError,
     NFCWriteError,
-    NFCAuthenticationError
+    NFCAuthenticationError,
+    NFCTagNotWritableError
 )
 
 __all__ = [
@@ -40,6 +42,7 @@ __all__ = [
     'authenticate_tag',
     'read_ndef_data',
     'write_ndef_data',
+    'write_ndef_uri',
     'continuous_poll',
     
     # Exceptions
@@ -48,5 +51,6 @@ __all__ = [
     'NFCNoTagError',
     'NFCReadError',
     'NFCWriteError',
-    'NFCAuthenticationError'
+    'NFCAuthenticationError',
+    'NFCTagNotWritableError'
 ]

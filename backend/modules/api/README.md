@@ -290,6 +290,23 @@ def register_routes(app):
     def read_tag_data():
         """Read raw data from a detected tag."""
         # Implementation
+
+    @app.route('/api/nfc/ndef/read', methods=['GET'])
+    def read_ndef_data():
+        """Read and parse NDEF formatted data from a detected tag."""
+        # Implementation
+
+    @app.route('/api/nfc/ndef/write', methods=['POST'])
+    def write_ndef_data():
+        """Write NDEF formatted data to a detected tag.
+
+        Request body should include either url or text or both:
+        {
+            "url": "https://example.com",
+            "text": "Example text"
+        }
+        """
+        # Implementation
 ```
 
 #### 6. Authentication Middleware (`middleware/auth.py`)

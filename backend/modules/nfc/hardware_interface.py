@@ -7,7 +7,7 @@ import logging
 import board
 import busio
 from adafruit_pn532.i2c import PN532_I2C
-from .exceptions import NFCHardwareError, NFCReadError, NFCWriteError, NFCNoTagError, NFCAuthenticationError
+from .exceptions import NFCHardwareError, NFCReadError, NFCWriteError, NFCNoTagError, NFCAuthenticationError, NFCTagNotWritableError
 
 # Create logger
 logger = logging.getLogger(__name__)
@@ -532,8 +532,8 @@ class NFCReader:
         
         # Check if the tag is read-only
         if self.is_tag_read_only():
-            # This is clearer than a generic write error
-            raise NFCWriteError("Tag appears to be read-only or write-protected")
+            # Use our specialized exception for read-only tags
+            raise NFCTagNotWritableError("Tag appears to be read-only or write-protected")
         
         try:
             return self._write_block_internal(block_number, data)
