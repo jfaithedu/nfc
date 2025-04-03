@@ -25,3 +25,5 @@ sqlite3-api==0.1.0  # SQLite database management
 python-slugify==5.0.2  # URL/filename slugification
 PyJWT==2.1.0  # JWT token handling for API security
 apscheduler==3.8.0  # Scheduling tasks (e.g., cache cleanup)
+psutil==5.9.0  # System resource monitoring
+gpiozero==1.6.2  # GPIO control with fallback for non-Pi environments

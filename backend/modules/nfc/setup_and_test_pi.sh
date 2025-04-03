@@ -82,7 +82,7 @@ else
   echo -e "\nYou can now run the test script with:"
 fi
 
-echo "    source $VENV_PATH/bin/activate && $(dirname "$0")/test_nfc.py"
+echo "    source $VENV_PATH/bin/activate && python -m backend.modules.nfc.test_nfc"
 echo
 echo "Options:"
 echo "    -b, --bus BUS        I2C bus number (default: 1)"
@@ -92,7 +92,7 @@ echo "    -d, --duration SEC   Duration for polling tests (default: 10)"
 echo "    -v, --verbose        Enable verbose logging"
 echo
 echo "Example:"
-echo "    source $VENV_PATH/bin/activate && $(dirname "$0")/test_nfc.py -t detect -d 5"
+echo "    source $VENV_PATH/bin/activate && python -m backend.modules.nfc.test_nfc -t detect -d 5"
 echo
 echo "See test_nfc.py --help for more details"
 echo "============================================================="
