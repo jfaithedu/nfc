@@ -1,0 +1,15 @@
+{
+  "name": "nfc-music-player",
+  "version": "1.0.0",
+  "description": "NFC-Based Toddler-Friendly Music Player",
+  "private": true,
+  "scripts": {
+    "frontend:dev": "cd frontend && npm run dev",
+    "frontend:build": "cd frontend && npm run build",
+    "backend:start": "cd backend && python3 app.py",
+    "start": "npm run frontend:build && npm run backend:start"
+  },
+  "workspaces": [
+    "frontend"
+  ]
+}

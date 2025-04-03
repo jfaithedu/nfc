@@ -20,6 +20,13 @@ wheels/
 .installed.cfg
 *.egg
 
+# Built frontend files
+backend/modules/api/static/assets/**
+backend/modules/api/static/*.html
+backend/modules/api/static/*.js
+backend/modules/api/static/*.css
+backend/modules/api/static/*.ico
+
 # Node.js / React
 node_modules/
 npm-debug.log*
