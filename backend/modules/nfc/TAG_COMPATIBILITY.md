@@ -8,18 +8,40 @@ The NFC module is designed to work with a variety of NFC tag types, but some tag
 
 The system is designed to work with the following tag types:
 
-1. **MIFARE Classic**
+1. **NTAG215** (Added special optimizations for this type)
+   - 540 bytes total memory (504 bytes user available)
+   - 4-byte pages (135 pages total)
+   - No authentication required for access
+   - Used in many applications including Amiibo, gaming, and general NFC
+2. **MIFARE Classic**
    - Most common type of NFC tag
    - Uses authentication with sector keys
    - 1KB or 4KB storage capacity
-2. **NTAG / MIFARE Ultralight**
+3. **NTAG / MIFARE Ultralight**
    - No authentication required for reading
    - Simpler communication protocol
    - Limited storage capacity (usually 48 bytes to 888 bytes)
-3. **MIFARE DESFire**
+4. **MIFARE DESFire**
    - Advanced security features
    - More complex command set
    - Limited support in the current implementation
+
+## NTAG215 Memory Structure
+
+NTAG215 tags have a specific memory structure:
+
+- **Pages 0-4**: Reserved (manufacturer, serial number, etc.) - Read-only
+- **Pages 5-130**: User data (504 bytes) - Read/Write
+- **Pages 131-134**: Configuration and lock bytes - Special functionality
+
+When using the API functions, block numbers map to NTAG215 pages as follows:
+
+- Block 0 = Pages 0-3 (manufacturer data, read-only)
+- Block 1 = Pages 4-7 (beginning of user memory)
+- Block 2 = Pages 8-11 (user memory)
+- And so on...
+
+The system will automatically map block numbers to the appropriate NTAG215 pages.
 
 ## Common Issues and Solutions
 
@@ -61,13 +83,31 @@ If write operations fail but reads work:
 3. **Block restrictions**: Some blocks (like sector trailers or manufacturer blocks) cannot be written to.
    - Solution: Only write to data blocks, typically blocks 4-7, 8-11, etc., but not blocks 3, 7, 11, etc. (which are sector trailers).
 
+## Write Protection and Lock Bits
+
+The NTAG215 tags have several types of write protection:
+
+1. **Factory write protection**: Manufacturer data in pages 0-4 is permanently read-only.
+
+2. **Static lock bytes**: Pages 2-3 contain lock bits that can permanently protect
+   the first 16 pages from being written to.
+
+3. **Dynamic lock bytes**: In page 130, can lock any page in user memory.
+
+4. **Password protection**: Pages 133-134 can enable password authentication for writing.
+
+If you encounter write errors only, but reads work fine, your tag may have some form of
+write protection enabled. This is detected automatically and reported as "Tag appears to
+be read-only or write-protected".
+
 ## Recommended NFC Tags
 
 For best compatibility:
 
-1. **NTAG213/215/216**: Good general-purpose tags without authentication requirements.
-2. **MIFARE Ultralight**: Similar to NTAG, with simple access.
-3. **MIFARE Classic 1K**: Widely supported, but requires proper authentication.
+1. **NTAG215**: 504 bytes user memory, now specially supported by this implementation.
+2. **NTAG213/216**: Similar to NTAG215 with 144 bytes/888 bytes of user memory respectively.
+3. **MIFARE Ultralight**: Similar to NTAG, with simple access.
+4. **MIFARE Classic 1K**: Widely supported, but requires proper authentication.
 
 ## Testing Tag Compatibility
 

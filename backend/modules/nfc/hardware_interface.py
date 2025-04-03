@@ -155,6 +155,46 @@ class NFCReader:
             self._last_tag_uid = None
             return None
 
+    def detect_tag_type(self):
+        """
+        Attempt to detect the tag type based on the UID and other characteristics.
+        
+        Returns:
+            str: Tag type string ('ntag215', 'mifare_classic', 'unknown', etc.)
+        """
+        if not self._last_tag_uid:
+            return "unknown"
+            
+        # NTAG215 typically has 7-byte UIDs
+        if len(self._last_tag_uid) == 7:
+            # Try reading first page with ntag2xx method
+            try:
+                # Try to read page 0 (manufacturer info)
+                data = self._pn532.ntag2xx_read_block(0)
+                if data:
+                    logger.info(f"Detected NTAG2xx tag (likely NTAG215) with UID: {self._last_tag_uid.hex()}")
+                    return "ntag215"
+            except Exception:
+                pass
+        
+        # MIFARE Classic typically has 4-byte or 7-byte UIDs
+        if len(self._last_tag_uid) in [4, 7]:
+            # Try authenticating with MIFARE Classic method
+            try:
+                key = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]  # Factory default key
+                auth_result = self._pn532.mifare_classic_authenticate_block(
+                    self._last_tag_uid, 4, 0x60, key
+                )
+                if auth_result:
+                    logger.info(f"Detected MIFARE Classic tag with UID: {self._last_tag_uid.hex()}")
+                    return "mifare_classic"
+            except Exception:
+                pass
+        
+        # Default fallback
+        logger.info(f"Unknown tag type with UID: {self._last_tag_uid.hex()}")
+        return "unknown"
+        
     def read_block(self, block_number):
         """
         Read a data block from the currently detected tag.
@@ -177,16 +217,58 @@ class NFCReader:
             if not self.poll():
                 raise NFCNoTagError("No NFC tag detected")
         
+        # For NTAG215, convert block number to page number if needed
+        # NTAG215 pages are 4 bytes, blocks are typically considered 16 bytes
+        # So one block = 4 NTAG215 pages
+        tag_type = self.detect_tag_type()
+        
         try:
-            # First try to read directly without authentication (for NTAG/Ultralight tags)
-            # These tags don't require authentication for reading
+            # Special handling for NTAG215 tags
+            if tag_type == "ntag215":
+                # For NTAG215, we need to read 4 consecutive pages to get 16 bytes
+                start_page = block_number * 4
+                combined_data = bytearray()
+                
+                # Read 4 consecutive pages (each page is 4 bytes)
+                for page in range(start_page, start_page + 4):
+                    # Skip pages beyond the tag's capacity (NTAG215 has 135 pages, 0-134)
+                    if page > 134:
+                        # Pad with zeros if we exceed the tag's capacity
+                        combined_data.extend(bytes(4))
+                        continue
+                        
+                    try:
+                        page_data = self._pn532.ntag2xx_read_block(page)
+                        if page_data and len(page_data) == 4:
+                            combined_data.extend(page_data)
+                        else:
+                            # Pad with zeros if page read fails
+                            combined_data.extend(bytes(4))
+                    except Exception as e:
+                        logger.debug(f"Error reading NTAG215 page {page}: {str(e)}")
+                        # Pad with zeros if page read fails
+                        combined_data.extend(bytes(4))
+                
+                if len(combined_data) == 16:
+                    logger.debug(f"Read block {block_number} (pages {start_page}-{start_page+3}) from NTAG215")
+                    return bytes(combined_data)
+                else:
+                    logger.warning(f"Invalid data length {len(combined_data)} from NTAG215 read")
+            
+            # Try NTAG2xx read method for any tag (might work for NTAG215 and others)
             try:
                 data = self._pn532.ntag2xx_read_block(block_number)
                 if data and len(data) == 16:
                     logger.debug(f"Read block {block_number} as NTAG/Ultralight")
                     return bytes(data)
+                elif data and len(data) == 4:
+                    # Got a single page, need to pad to 16 bytes
+                    padded_data = bytearray(data)
+                    padded_data.extend(bytes(12))  # Pad to 16 bytes
+                    logger.debug(f"Read page {block_number} as NTAG/Ultralight (padded to 16 bytes)")
+                    return bytes(padded_data)
             except Exception as e:
-                logger.debug(f"NTAG read attempt failed: {str(e)}, trying as MIFARE")
+                logger.debug(f"NTAG read attempt failed: {str(e)}, trying other methods")
             
             # If NTAG read fails, try as MIFARE Classic
             try:
@@ -260,6 +342,171 @@ class NFCReader:
             logger.error(error_msg)
             raise NFCReadError(error_msg)
 
+    def is_tag_read_only(self):
+        """
+        Check if the currently detected tag is read-only.
+        
+        Returns:
+            bool: True if tag appears to be read-only, False otherwise
+        """
+        if not self._connected or not self._pn532 or not self._last_tag_uid:
+            return False
+            
+        # Try to determine if this is a read-only tag
+        # Strategy: Try to read a block, then try to write the same data back
+        try:
+            # Use block 4 which is typically a data block on most tags
+            test_block = 4
+            
+            # Try to read the block first
+            original_data = None
+            try:
+                original_data = self.read_block(test_block)
+                logger.debug(f"Read data for read-only test: {original_data.hex()}")
+            except Exception as e:
+                logger.debug(f"Could not read block {test_block} for read-only test: {str(e)}")
+                return False  # If we can't read, we can't determine
+                
+            # Try to write the same data back (this shouldn't modify the tag)
+            try:
+                # Use the _write_block_internal method which doesn't call is_tag_read_only
+                self._write_block_internal(test_block, original_data)
+                return False  # If write succeeds, tag is not read-only
+            except Exception as e:
+                logger.debug(f"Write failed in read-only test: {str(e)}")
+                return True  # If write fails but read works, tag is likely read-only
+                
+        except Exception as e:
+            logger.debug(f"Error in read-only test: {str(e)}")
+            return False  # Default to assuming it's not read-only if test fails
+    
+    def _write_block_internal(self, block_number, data):
+        """
+        Internal method to write to a block without calling is_tag_read_only.
+        This prevents infinite recursion when is_tag_read_only calls this method.
+        
+        Args:
+            block_number (int): Block number to write
+            data (bytes): Data to write (must be 16 bytes)
+            
+        Returns:
+            bool: True if write successful
+            
+        Raises:
+            NFCNoTagError: If no tag is present
+            NFCWriteError: If writing fails
+        """
+        # Verify data length
+        if not data or len(data) != 16:
+            raise NFCWriteError("Data length must be exactly 16 bytes")
+        
+        tag_type = self.detect_tag_type()
+        
+        # Special handling for NTAG215 tags
+        if tag_type == "ntag215":
+            start_page = block_number * 4
+            
+            # NTAG215 has pages 0-134, with some reserved
+            # Pages 0-4: Reserved (manufacturer, serial number, etc.)
+            # Pages 5-130: User data (504 bytes)
+            # Pages 131-134: Configuration and lock bytes
+            
+            if start_page < 4:
+                raise NFCWriteError(f"Cannot write to NTAG215 pages {start_page}-{start_page+3} (reserved pages)")
+            
+            if start_page > 130:
+                raise NFCWriteError(f"Cannot write to NTAG215 pages {start_page}-{start_page+3} (beyond user memory)")
+            
+            # Write 4 pages (4 bytes each) for a 16-byte block
+            success = True
+            for i in range(4):
+                page = start_page + i
+                page_data = data[i*4:(i+1)*4]
+                
+                if page <= 130:  # Only write to valid user memory pages
+                    try:
+                        self._pn532.ntag2xx_write_block(page, page_data)
+                        logger.debug(f"Successfully wrote data to NTAG215 page {page}")
+                    except Exception as e:
+                        success = False
+                        logger.error(f"Failed to write to NTAG215 page {page}: {str(e)}")
+                        # Continue to try other pages
+            
+            if success:
+                logger.info(f"Successfully wrote data to NTAG215 block {block_number} (pages {start_page}-{start_page+3})")
+                return True
+            else:
+                raise NFCWriteError(f"Failed to write all pages for NTAG215 block {block_number}")
+        
+        # Try standard NTAG2xx write (works for some tags)
+        try:
+            self._pn532.ntag2xx_write_block(block_number, data[:4])  # Only write first 4 bytes
+            logger.info(f"Successfully wrote data to block {block_number} as NTAG/Ultralight (first 4 bytes)")
+            return True
+        except Exception as e:
+            logger.debug(f"NTAG write attempt failed: {str(e)}, trying as MIFARE")
+        
+        # Try as MIFARE Classic
+        try:
+            # Authenticate before writing - MIFARE blocks require authentication
+            # Calculate the sector (each sector has 4 blocks)
+            sector = block_number // 4
+            
+            # Try both key A and key B with factory defaults
+            keys = [
+                (0x60, [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),  # Key A default
+                (0x61, [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),  # Key B default
+                (0x60, [0xD3, 0xF7, 0xD3, 0xF7, 0xD3, 0xF7]),  # Another common Key A
+                (0x60, [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5])   # Another common Key A
+            ]
+            
+            auth_success = False
+            for key_type, key in keys:
+                try:
+                    auth_result = self._pn532.mifare_classic_authenticate_block(
+                        self._last_tag_uid, block_number, key_type, key
+                    )
+                    if auth_result:
+                        auth_success = True
+                        logger.debug(f"Authentication succeeded with key_type {key_type}")
+                        break
+                except Exception as auth_e:
+                    logger.debug(f"Authentication attempt failed: {str(auth_e)}")
+                    continue
+            
+            if not auth_success:
+                raise NFCWriteError(f"All authentication attempts failed for block {block_number}")
+            
+            # Write data to the specified block
+            self._pn532.mifare_classic_write_block(block_number, data)
+            logger.info(f"Successfully wrote data to block {block_number} as MIFARE Classic")
+            return True
+            
+        except Exception as mifare_e:
+            logger.debug(f"MIFARE write attempt failed: {str(mifare_e)}")
+            
+        # As a last resort, try a direct block write without specifying tag type
+        try:
+            # This is a generic command to write a block
+            # Using raw commands as a fallback
+            command = bytearray([0x40])  # InDataExchange command
+            command.extend([0xA0, block_number])  # MIFARE Write command + block number
+            command.extend(data)  # Add the data to write
+            
+            logger.debug(f"Trying direct block write for block {block_number}")
+            response = self._pn532._write_frame(command)
+            
+            if response:
+                logger.info(f"Successfully wrote data to block {block_number} using direct write")
+                return True
+            else:
+                raise NFCWriteError("No response from direct write command")
+        except Exception as direct_e:
+            logger.debug(f"Direct write attempt failed: {str(direct_e)}")
+        
+        # If we got here, all write attempts failed
+        raise NFCWriteError(f"All write methods failed for block {block_number}")
+    
     def write_block(self, block_number, data):
         """
         Write data to a block on the currently detected tag.
@@ -283,80 +530,13 @@ class NFCReader:
             if not self.poll():
                 raise NFCNoTagError("No NFC tag detected")
         
-        # Verify data length
-        if not data or len(data) != 16:
-            raise NFCWriteError("Data length must be exactly 16 bytes")
+        # Check if the tag is read-only
+        if self.is_tag_read_only():
+            # This is clearer than a generic write error
+            raise NFCWriteError("Tag appears to be read-only or write-protected")
         
         try:
-            # First try as NTAG/Ultralight
-            try:
-                self._pn532.ntag2xx_write_block(block_number, data)
-                logger.info(f"Successfully wrote data to block {block_number} as NTAG/Ultralight")
-                return True
-            except Exception as e:
-                logger.debug(f"NTAG write attempt failed: {str(e)}, trying as MIFARE")
-            
-            # Try as MIFARE Classic if NTAG fails
-            try:
-                # Authenticate before writing - MIFARE blocks require authentication
-                # Calculate the sector (each sector has 4 blocks)
-                sector = block_number // 4
-                
-                # Try both key A and key B with factory defaults
-                keys = [
-                    (0x60, [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),  # Key A default
-                    (0x61, [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),  # Key B default
-                    (0x60, [0xD3, 0xF7, 0xD3, 0xF7, 0xD3, 0xF7]),  # Another common Key A
-                    (0x60, [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5])   # Another common Key A
-                ]
-                
-                auth_success = False
-                for key_type, key in keys:
-                    try:
-                        auth_result = self._pn532.mifare_classic_authenticate_block(
-                            self._last_tag_uid, block_number, key_type, key
-                        )
-                        if auth_result:
-                            auth_success = True
-                            logger.debug(f"Authentication succeeded with key_type {key_type}")
-                            break
-                    except Exception as auth_e:
-                        logger.debug(f"Authentication attempt failed: {str(auth_e)}")
-                        continue
-                
-                if not auth_success:
-                    raise NFCWriteError(f"All authentication attempts failed for block {block_number}")
-                
-                # Write data to the specified block
-                self._pn532.mifare_classic_write_block(block_number, data)
-                logger.info(f"Successfully wrote data to block {block_number} as MIFARE Classic")
-                return True
-                
-            except Exception as mifare_e:
-                logger.debug(f"MIFARE write attempt failed: {str(mifare_e)}")
-                
-            # As a last resort, try a direct block write without specifying tag type
-            try:
-                # This is a generic command to write a block
-                # Using raw commands as a fallback
-                command = bytearray([0x40])  # InDataExchange command
-                command.extend([0xA0, block_number])  # MIFARE Write command + block number
-                command.extend(data)  # Add the data to write
-                
-                logger.debug(f"Trying direct block write for block {block_number}")
-                response = self._pn532._write_frame(command)
-                
-                if response:
-                    logger.info(f"Successfully wrote data to block {block_number} using direct write")
-                    return True
-                else:
-                    raise NFCWriteError("No response from direct write command")
-            except Exception as direct_e:
-                logger.debug(f"Direct write attempt failed: {str(direct_e)}")
-                # Fall through to the final error
-            
-            # If we got here, all write attempts failed
-            raise NFCWriteError(f"All write methods failed for block {block_number}")
+            return self._write_block_internal(block_number, data)
             
         except Exception as e:
             error_msg = f"Error writing to block {block_number}: {str(e)}"
