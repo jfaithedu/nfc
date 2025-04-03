@@ -3,12 +3,22 @@ hardware_interface.py - Low-level NFC reader interface for I2C communication.
 """
 
 import time
-from smbus2 import SMBus
 import logging
-from .exceptions import NFCHardwareError, NFCReadError, NFCWriteError, NFCNoTagError, NFCAuthenticationError
 
 # Create logger
 logger = logging.getLogger(__name__)
+
+# Try to import smbus2, fall back to smbus if not available
+try:
+    from smbus2 import SMBus
+    logger.info("Using smbus2 library")
+except ImportError:
+    try:
+        from smbus import SMBus
+        logger.info("Using smbus library instead of smbus2")
+    except ImportError:
+        raise ImportError("Neither smbus2 nor smbus library found. Please install one: sudo pip3 install smbus2 or sudo apt-get install python3-smbus")
+from .exceptions import NFCHardwareError, NFCReadError, NFCWriteError, NFCNoTagError, NFCAuthenticationError
 
 # NFC HAT Command codes - these would need to be adjusted for the specific hardware
 CMD_RESET = 0x01

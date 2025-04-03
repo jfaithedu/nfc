@@ -15,7 +15,7 @@ fi
 # Install required system packages
 echo -e "\n[1/4] Installing required system packages..."
 sudo apt-get update
-sudo apt-get install -y python3-pip python3-smbus i2c-tools
+sudo apt-get install -y python3-pip python3-smbus i2c-tools &&  echo "Packages installed successfully"
 
 # Enable I2C if not already enabled
 echo -e "\n[2/4] Checking I2C configuration..."
