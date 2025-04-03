@@ -1,2 +1,4 @@
 # NFC Module Requirements
-smbus2>=0.4.2  # For I2C communication
+adafruit-circuitpython-pn532>=1.2.0  # For PN532 NFC HAT
+adafruit-blinka>=7.0.0  # For board and busio support
+RPi.GPIO>=0.7.0  # Required for GPIO access on Raspberry Pi

@@ -2,7 +2,24 @@
 
 ## Overview
 
-The NFC Module is responsible for detecting and reading NFC tags placed on the music player device. It interfaces with the NFC HAT connected to the Raspberry Pi via I2C and provides tag information to the rest of the application.
+The NFC Module is responsible for detecting and reading NFC tags placed on the music player device. It interfaces with the PN532 NFC HAT connected to the Raspberry Pi via I2C and provides tag information to the rest of the application.
+
+## Dependencies
+
+This module requires the following Python packages:
+
+- adafruit-circuitpython-pn532: For interfacing with the PN532 NFC controller
+- adafruit-blinka: For CircuitPython board and busio support
+- RPi.GPIO: For GPIO access on Raspberry Pi
+
+And the following system packages:
+
+- python3-pip
+- python3-smbus
+- i2c-tools
+- libgpiod2
+
+See `requirements.txt` for specific version requirements.
 
 ## Core Responsibilities
 

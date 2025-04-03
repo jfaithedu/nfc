@@ -16,7 +16,7 @@ This document provides step-by-step instructions for setting up and testing the 
 
    ```bash
    sudo apt-get update
-   sudo apt-get install -y python3-pip python3-smbus i2c-tools
+   sudo apt-get install -y python3-pip python3-smbus i2c-tools libgpiod2
    ```
 
 2. **Enable I2C Interface**
@@ -31,10 +31,10 @@ This document provides step-by-step instructions for setting up and testing the 
 
 3. **Install Python Dependencies**
 
-   Install the required Python package:
+   Install the required Python packages:
 
    ```bash
-   sudo pip3 install smbus2
+   sudo pip3 install adafruit-circuitpython-pn532 adafruit-blinka RPi.GPIO
    ```
 
 4. **Verify I2C Connection**

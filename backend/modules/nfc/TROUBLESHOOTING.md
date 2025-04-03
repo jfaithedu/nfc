@@ -90,32 +90,26 @@ If `i2cdetect -y 1` doesn't show your NFC device:
 
 ## Python and Module Issues
 
-### ModuleNotFoundError for smbus2
+### ModuleNotFoundError for Adafruit Libraries
 
-If you see `ModuleNotFoundError: No module named 'smbus2'`:
+If you see errors like `ModuleNotFoundError: No module named 'adafruit_pn532'` or `No module named 'board'`:
 
-1. **Install with pip3 directly**:
-
-   ```bash
-   sudo pip3 install smbus2
-   ```
-
-2. **Check if installed**:
+1. **Install the required libraries**:
 
    ```bash
-   pip3 list | grep smbus2
+   sudo pip3 install adafruit-circuitpython-pn532 adafruit-blinka RPi.GPIO
    ```
 
-3. **Try alternative package**:
+2. **Check if they're installed correctly**:
+
    ```bash
-   sudo apt-get install -y python3-smbus
+   pip3 list | grep adafruit
    ```
-   Then modify the hardware_interface.py file:
-   ```python
-   try:
-       from smbus2 import SMBus
-   except ImportError:
-       from smbus import SMBus
+
+3. **For board/busio errors**:
+   Make sure adafruit-blinka is installed, as it provides these modules:
+   ```bash
+   sudo pip3 install adafruit-blinka
    ```
 
 ### Permission Issues

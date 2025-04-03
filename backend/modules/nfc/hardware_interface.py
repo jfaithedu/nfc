@@ -1,46 +1,26 @@
 """
-hardware_interface.py - Low-level NFC reader interface for I2C communication.
+hardware_interface.py - Low-level NFC reader interface using Adafruit PN532 library.
 """
 
 import time
 import logging
+import board
+import busio
+from adafruit_pn532.i2c import PN532_I2C
+from .exceptions import NFCHardwareError, NFCReadError, NFCWriteError, NFCNoTagError, NFCAuthenticationError
 
 # Create logger
 logger = logging.getLogger(__name__)
 
-# Try to import smbus2, fall back to smbus if not available
-try:
-    from smbus2 import SMBus
-    logger.info("Using smbus2 library")
-except ImportError:
-    try:
-        from smbus import SMBus
-        logger.info("Using smbus library instead of smbus2")
-    except ImportError:
-        raise ImportError("Neither smbus2 nor smbus library found. Please install one: sudo pip3 install smbus2 or sudo apt-get install python3-smbus")
-from .exceptions import NFCHardwareError, NFCReadError, NFCWriteError, NFCNoTagError, NFCAuthenticationError
-
-# NFC HAT Command codes - these would need to be adjusted for the specific hardware
-CMD_RESET = 0x01
-CMD_VERSION = 0x02
-CMD_POLL = 0x03
-CMD_READ_BLOCK = 0x04
-CMD_WRITE_BLOCK = 0x05
-CMD_AUTHENTICATE = 0x06
-
-# Response codes
-RESP_SUCCESS = 0x00
-RESP_ERROR = 0xFF
-RESP_NO_TAG = 0xFE
-
 class NFCReader:
     """
-    Low-level NFC reader interface for I2C communication.
+    NFC reader interface using the Adafruit PN532 library.
 
     Attributes:
-        i2c_bus (int): I2C bus number
+        i2c_bus (int): I2C bus number (not used in Adafruit implementation, kept for API compatibility)
         i2c_address (int): I2C device address
-        _device: SMBus device instance
+        _pn532: PN532 device instance
+        _i2c: I2C bus instance
     """
 
     def __init__(self, i2c_bus=1, i2c_address=0x24):
@@ -48,12 +28,13 @@ class NFCReader:
         Initialize NFC reader with I2C parameters.
 
         Args:
-            i2c_bus (int): I2C bus number (usually 1 on Raspberry Pi)
-            i2c_address (int): I2C device address of the NFC HAT
+            i2c_bus (int): I2C bus number (kept for API compatibility)
+            i2c_address (int): I2C device address of the NFC HAT (default 0x24)
         """
         self.i2c_bus = i2c_bus
         self.i2c_address = i2c_address
-        self._device = None
+        self._pn532 = None
+        self._i2c = None
         self._connected = False
         self._last_tag_uid = None
         logger.info(f"Initializing NFC reader on I2C bus {i2c_bus}, address 0x{i2c_address:02X}")
@@ -66,51 +47,60 @@ class NFCReader:
             bool: True if connected successfully
         """
         try:
-            self._device = SMBus(self.i2c_bus)
+            # Initialize I2C bus
+            self._i2c = busio.I2C(board.SCL, board.SDA)
             
-            # Try to read version to confirm communication
-            version = self.get_version()
-            if version:
+            # Create PN532 instance
+            self._pn532 = PN532_I2C(self._i2c, address=self.i2c_address, debug=False)
+            
+            # Get firmware version to check connection
+            try:
+                firmware_data = self._pn532.firmware_version
+                ic, ver, rev, support = firmware_data
+                version = f"v{ver}.{rev}"
+                logger.info(f"Connected to PN532 NFC reader: IC={ic}, Version={version}, Support={support}")
+                
+                # Configure to read MiFare cards
+                self._pn532.SAM_configuration()
+                
                 self._connected = True
-                logger.info(f"Connected to NFC hardware: {version}")
                 return True
-            
-            # Close the bus if we couldn't communicate
-            self._device.close()
-            self._device = None
-            logger.error("Failed to communicate with NFC hardware")
-            return False
-            
+                
+            except Exception as e:
+                logger.error(f"Failed to get firmware version: {str(e)}")
+                self.disconnect()
+                return False
+                
         except Exception as e:
             logger.error(f"Error connecting to NFC hardware: {str(e)}")
-            if self._device:
-                try:
-                    self._device.close()
-                except:
-                    pass
-                self._device = None
+            self.disconnect()
             return False
 
     def disconnect(self):
         """Close connection to NFC hardware."""
-        if self._device:
-            try:
-                self._device.close()
+        try:
+            if self._i2c:
+                self._i2c.deinit()
                 logger.info("Disconnected from NFC hardware")
-            except Exception as e:
-                logger.error(f"Error disconnecting from NFC hardware: {str(e)}")
-            finally:
-                self._device = None
-                self._connected = False
+        except Exception as e:
+            logger.error(f"Error disconnecting from NFC hardware: {str(e)}")
+        finally:
+            self._pn532 = None
+            self._i2c = None
+            self._connected = False
 
     def reset(self):
-        """Hard reset the NFC hardware."""
+        """
+        Reset the NFC hardware.
+        Note: Adafruit library doesn't expose a direct reset command,
+        but we can reinitialize the device.
+        """
         if not self._connected:
             raise NFCHardwareError("Not connected to NFC hardware")
         
         try:
-            self.send_command(CMD_RESET)
-            time.sleep(0.1)  # Wait for reset to complete
+            # Configure PN532 back to default settings
+            self._pn532.SAM_configuration()
             logger.info("NFC hardware reset completed")
             return True
         except Exception as e:
@@ -124,112 +114,18 @@ class NFCReader:
         Returns:
             str: Version string or None if failed
         """
-        try:
-            logger.info("Attempting to get NFC hardware version...")
-            # First try a simple read to test communication
-            try:
-                # Simple read test to verify basic I2C communication
-                logger.debug(f"Testing basic I2C read from address 0x{self.i2c_address:02X}")
-                test_read = self._device.read_byte(self.i2c_address)
-                logger.debug(f"Initial I2C read test result: 0x{test_read:02X}")
-            except Exception as e:
-                logger.error(f"Basic I2C read test failed: {str(e)}")
-                return None
-                
-            # Now try the actual command
-            response = self.send_command(CMD_VERSION)
-            if response and len(response) >= 2:
-                major = response[0]
-                minor = response[1]
-                return f"v{major}.{minor}"
-            logger.error("Got invalid response format from VERSION command")
+        if not self._connected or not self._pn532:
+            logger.error("Not connected to NFC hardware")
             return None
+            
+        try:
+            firmware_data = self._pn532.firmware_version
+            ic, ver, rev, support = firmware_data
+            version = f"v{ver}.{rev}"
+            return version
         except Exception as e:
             logger.error(f"Error getting NFC hardware version: {str(e)}")
             return None
-
-    def send_command(self, command, params=None):
-        """
-        Send a command to the NFC hardware.
-
-        Args:
-            command (int): Command code
-            params (bytes, optional): Command parameters
-
-        Returns:
-            bytes: Response data
-            
-        Raises:
-            NFCHardwareError: If communication fails
-        """
-        if not self._device:
-            raise NFCHardwareError("Not connected to NFC hardware")
-        
-        # Prepare command packet
-        packet = bytearray([command])
-        if params:
-            packet.extend(params)
-        
-        logger.debug(f"Sending command: 0x{command:02X}, params: {params.hex() if params else 'None'}")
-        
-        try:
-            # Write command to device
-            logger.debug(f"Writing {len(packet)} bytes to device")
-            for i, byte in enumerate(packet):
-                try:
-                    self._device.write_byte(self.i2c_address, byte)
-                    logger.debug(f"Wrote byte {i+1}/{len(packet)}: 0x{byte:02X}")
-                    time.sleep(0.001)  # Small delay between bytes
-                except Exception as e:
-                    logger.error(f"Failed writing byte {i+1}/{len(packet)}: {str(e)}")
-                    raise
-            
-            logger.debug("Waiting for device to process command...")
-            time.sleep(0.05)  # Wait for processing
-            
-            # Read response length
-            try:
-                logger.debug("Reading response length...")
-                response_length = self._device.read_byte(self.i2c_address)
-                logger.debug(f"Response length: {response_length}")
-            except Exception as e:
-                logger.error(f"Failed to read response length: {str(e)}")
-                raise NFCHardwareError(f"Failed to read response length: {str(e)}")
-            
-            # If length is zero, return empty response
-            if response_length == 0:
-                logger.debug("Response length is 0, returning empty response")
-                return b''
-                
-            # Read response data
-            response = bytearray()
-            for _ in range(response_length):
-                response.append(self._device.read_byte(self.i2c_address))
-                time.sleep(0.001)  # Small delay between reads
-            
-            # Check for error response
-            if response and response[0] == RESP_ERROR:
-                error_code = response[1] if len(response) > 1 else 0
-                error_msg = f"NFC hardware returned error: {error_code}"
-                logger.error(error_msg)
-                
-                if error_code == RESP_NO_TAG:
-                    raise NFCNoTagError("No NFC tag detected")
-                    
-                raise NFCHardwareError(error_msg)
-                
-            return bytes(response)
-            
-        except NFCNoTagError:
-            # Re-raise specific exceptions
-            raise
-        except NFCHardwareError:
-            # Re-raise hardware errors
-            raise
-        except Exception as e:
-            error_msg = f"I2C communication error: {str(e)}"
-            logger.error(error_msg)
-            raise NFCHardwareError(error_msg)
 
     def poll(self):
         """
@@ -238,20 +134,22 @@ class NFCReader:
         Returns:
             bytes or None: Tag UID if detected, None otherwise
         """
+        if not self._connected or not self._pn532:
+            logger.error("Not connected to NFC hardware")
+            return None
+            
         try:
-            response = self.send_command(CMD_POLL)
+            # read_passive_target will return None if no card is available
+            uid = self._pn532.read_passive_target(timeout=0.1)
             
-            # Check if a tag was found (non-empty response)
-            if response and len(response) >= 4:  # UID is typically 4-7 bytes
-                self._last_tag_uid = response
-                return response
-            
+            if uid is not None:
+                self._last_tag_uid = bytes(uid)
+                logger.debug(f"Tag detected with UID: {self._last_tag_uid.hex()}")
+                return self._last_tag_uid
+                
             self._last_tag_uid = None
             return None
             
-        except NFCNoTagError:
-            self._last_tag_uid = None
-            return None
         except Exception as e:
             logger.error(f"Error polling for NFC tag: {str(e)}")
             self._last_tag_uid = None
@@ -271,27 +169,26 @@ class NFCReader:
             NFCNoTagError: If no tag is present
             NFCReadError: If reading fails
         """
+        if not self._connected or not self._pn532:
+            raise NFCHardwareError("Not connected to NFC hardware")
+            
         if not self._last_tag_uid:
             # Try polling first to see if there's a tag
             if not self.poll():
                 raise NFCNoTagError("No NFC tag detected")
         
         try:
-            # Send read command with block number
-            params = bytearray([block_number])
-            response = self.send_command(CMD_READ_BLOCK, params)
+            # Read data from the specified block
+            data = self._pn532.mifare_classic_read_block(block_number)
             
-            if not response or len(response) < 16:
+            if not data or len(data) != 16:
                 raise NFCReadError(f"Invalid data read from block {block_number}")
                 
-            return response
+            return bytes(data)
             
         except NFCNoTagError:
             # Re-raise no tag error
             raise
-        except NFCHardwareError as e:
-            # Convert hardware errors during reading to NFCReadError
-            raise NFCReadError(f"Hardware error while reading block {block_number}: {str(e)}")
         except Exception as e:
             error_msg = f"Error reading block {block_number}: {str(e)}"
             logger.error(error_msg)
@@ -312,6 +209,9 @@ class NFCReader:
             NFCNoTagError: If no tag is present
             NFCWriteError: If writing fails
         """
+        if not self._connected or not self._pn532:
+            raise NFCHardwareError("Not connected to NFC hardware")
+            
         if not self._last_tag_uid:
             # Try polling first to see if there's a tag
             if not self.poll():
@@ -322,32 +222,17 @@ class NFCReader:
             raise NFCWriteError("Data length must be exactly 16 bytes")
         
         try:
-            # Send write command with block number and data
-            params = bytearray([block_number]) + bytearray(data)
-            response = self.send_command(CMD_WRITE_BLOCK, params)
+            # Write data to the specified block
+            self._pn532.mifare_classic_write_block(block_number, data)
+            logger.info(f"Successfully wrote data to block {block_number}")
+            return True
             
-            # Check success response
-            if response and response[0] == RESP_SUCCESS:
-                logger.info(f"Successfully wrote data to block {block_number}")
-                return True
-                
-            raise NFCWriteError(f"Failed to write to block {block_number}")
-            
-        except NFCNoTagError:
-            # Re-raise no tag error
-            raise
-        except NFCHardwareError as e:
-            # Convert hardware errors during writing to NFCWriteError
-            raise NFCWriteError(f"Hardware error while writing block {block_number}: {str(e)}")
-        except NFCWriteError:
-            # Re-raise write errors
-            raise
         except Exception as e:
             error_msg = f"Error writing to block {block_number}: {str(e)}"
             logger.error(error_msg)
             raise NFCWriteError(error_msg)
 
-    def authenticate(self, block_number, key_type, key):
+    def authenticate(self, block_number, key_type='A', key=b'\xFF\xFF\xFF\xFF\xFF\xFF'):
         """
         Authenticate with a MIFARE tag before reading/writing protected blocks.
         
@@ -363,6 +248,9 @@ class NFCReader:
             NFCNoTagError: If no tag is present
             NFCAuthenticationError: If authentication fails
         """
+        if not self._connected or not self._pn532:
+            raise NFCHardwareError("Not connected to NFC hardware")
+            
         if not self._last_tag_uid:
             # Try polling first to see if there's a tag
             if not self.poll():
@@ -372,27 +260,27 @@ class NFCReader:
         if not key or len(key) != 6:
             raise NFCAuthenticationError("Authentication key must be exactly 6 bytes")
         
-        # Key type byte (0 for A, 1 for B)
-        key_type_byte = 0 if key_type.upper() == 'A' else 1
-        
         try:
-            # Send authenticate command with block, key type, and key
-            params = bytearray([block_number, key_type_byte]) + bytearray(key)
-            response = self.send_command(CMD_AUTHENTICATE, params)
+            # Authenticate the block
+            auth_method = 0x60 if key_type.upper() == 'A' else 0x61  # 0x60 = auth with key A, 0x61 = auth with key B
             
-            # Check success response
-            if response and response[0] == RESP_SUCCESS:
+            # Convert key to list if it's bytes
+            key_list = list(key) if isinstance(key, bytes) else key
+            
+            result = self._pn532.mifare_classic_authenticate_block(
+                self._last_tag_uid, block_number, auth_method, key_list
+            )
+            
+            if result:
                 logger.info(f"Successfully authenticated for block {block_number}")
                 return True
                 
+            logger.error("Authentication failed")
             raise NFCAuthenticationError(f"Authentication failed for block {block_number}")
             
         except NFCNoTagError:
             # Re-raise no tag error
             raise
-        except NFCHardwareError as e:
-            # Convert hardware errors during authentication to NFCAuthenticationError
-            raise NFCAuthenticationError(f"Hardware error during authentication: {str(e)}")
         except NFCAuthenticationError:
             # Re-raise authentication errors
             raise

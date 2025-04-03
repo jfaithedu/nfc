@@ -15,7 +15,40 @@ fi
 # Install required system packages
 echo -e "\n[1/4] Installing required system packages..."
 sudo apt-get update
-sudo apt-get install -y python3-pip python3-smbus i2c-tools python3-venv python3-full &&  echo "Packages installed successfully"
+sudo apt-get install -y python3-pip python3-smbus i2c-tools python3-venv python3-full libgpiod2 &&  echo "Packages installed successfully"
+
+# Setup GPIO and I2C access permissions
+echo "Setting up GPIO and I2C permissions..."
+if ! grep -q "^SUBSYSTEM==\"gpio\", GROUP=\"gpio\"" /etc/udev/rules.d/99-com.rules 2>/dev/null; then
+  sudo bash -c 'cat > /etc/udev/rules.d/99-com.rules << EOF
+# I2C permissions
+SUBSYSTEM=="i2c-dev", GROUP="i2c", MODE="0660"
+# GPIO permissions
+SUBSYSTEM=="gpio", GROUP="gpio", MODE="0660"
+SUBSYSTEM=="gpio*", PROGRAM="/bin/sh -c '\''chown -R root:gpio /sys/class/gpio && chmod -R 770 /sys/class/gpio; chown -R root:gpio /sys/devices/virtual/gpio && chmod -R 770 /sys/devices/virtual/gpio; chown -R root:gpio /sys/devices/platform/soc/*.gpio/gpio && chmod -R 770 /sys/devices/platform/soc/*.gpio/gpio'\''", TAG+="systemd", OWNER="root", GROUP="gpio", MODE="0660"
+# SPI permissions
+SUBSYSTEM=="spidev", GROUP="spi", MODE="0660"
+EOF'
+  echo "Created GPIO/I2C/SPI permissions file"
+  sudo udevadm control --reload-rules
+  sudo udevadm trigger
+else
+  echo "GPIO/I2C/SPI permissions file already exists"
+fi
+
+# Create necessary groups if they don't exist
+for group in gpio i2c spi; do
+  if ! grep -q "^$group:" /etc/group; then
+    sudo groupadd -f $group
+    echo "Created $group group"
+  fi
+  
+  # Add user to group
+  if ! groups $USER | grep -q "\b$group\b"; then
+    sudo usermod -a -G $group $USER
+    echo "Added user to $group group"
+  fi
+done
 
 # Enable I2C if not already enabled
 echo -e "\n[2/4] Checking I2C configuration..."
