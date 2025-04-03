@@ -1,0 +1,2 @@
+# NFC Module Requirements
+smbus2>=0.4.2  # For I2C communication
