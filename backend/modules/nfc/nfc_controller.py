@@ -143,13 +143,15 @@ def read_tag_data(block=4):
             logger.error(error_msg)
             raise NFCReadError(error_msg)
 
-def write_tag_data(data, block=4):
+def write_tag_data(data, block=4, verify=True, max_retries=3):
     """
     Write data to a specific block on the currently present tag.
     
     Args:
         data (bytes): Data to write (must be 16 bytes or less)
         block (int): Block number to write to
+        verify (bool): Whether to verify the data was written correctly
+        max_retries (int): Maximum number of retry attempts if verification fails
     
     Returns:
         bool: True if write successful
@@ -180,19 +182,68 @@ def write_tag_data(data, block=4):
         if len(data) < 16:
             data = data.ljust(16, b'\x00')
         
+        retry_count = 0
+        
         try:
-            # Write data to tag
-            success = _nfc_reader.write_block(block, data)
+            while retry_count <= max_retries:
+                try:
+                    # Write data to tag
+                    success = _nfc_reader.write_block(block, data)
+                    
+                    if not success:
+                        raise NFCWriteError(f"Failed to write data to block {block}")
+                    
+                    # If verification is requested, read back the data and compare
+                    if verify:
+                        # Small delay to ensure write is complete
+                        time.sleep(0.05)
+                        
+                        # Read back the data
+                        read_data = _nfc_reader.read_block(block)
+                        
+                        # Compare the data
+                        if read_data != data:
+                            logger.warning(f"Verification failed for block {block}. Retry {retry_count+1}/{max_retries}")
+                            logger.warning(f"Expected: {data.hex()}, Got: {read_data.hex()}")
+                            
+                            # If we've reached max retries, raise an error
+                            if retry_count >= max_retries:
+                                error_msg = f"Data verification failed after {max_retries} attempts"
+                                logger.error(error_msg)
+                                raise NFCWriteError(error_msg)
+                            
+                            # Otherwise, retry
+                            retry_count += 1
+                            continue
+                    
+                    logger.info(f"Successfully wrote data to block {block}")
+                    return True
+                        
+                except NFCNoTagError:
+                    # Re-raise no tag error immediately
+                    logger.warning("No tag present when trying to write")
+                    raise
+                except NFCWriteError as e:
+                    # Re-raise write errors if it's the last retry
+                    if retry_count >= max_retries:
+                        raise
+                    logger.warning(f"Write error, retrying ({retry_count+1}/{max_retries}): {str(e)}")
+                    retry_count += 1
+                except Exception as e:
+                    error_msg = f"Error writing tag data to block {block}: {str(e)}"
+                    logger.error(error_msg)
+                    
+                    # If we've reached max retries, raise an error
+                    if retry_count >= max_retries:
+                        raise NFCWriteError(error_msg)
+                    
+                    retry_count += 1
             
-            if success:
-                logger.info(f"Successfully wrote data to block {block}")
-                return True
+            # If we exit the loop without returning, we've exhausted all retries
+            raise NFCWriteError(f"Failed to write data to block {block} after {max_retries} attempts")
                 
-            raise NFCWriteError(f"Failed to write data to block {block}")
-            
         except NFCNoTagError:
             # Re-raise no tag error
-            logger.warning("No tag present when trying to write")
             raise
         except NFCWriteError:
             # Re-raise write errors

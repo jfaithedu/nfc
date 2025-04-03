@@ -178,6 +178,21 @@ class NFCReader:
                 raise NFCNoTagError("No NFC tag detected")
         
         try:
+            # Authenticate before reading - MIFARE blocks require authentication
+            # Calculate the sector (each sector has 4 blocks)
+            sector = block_number // 4
+            # Get the first block of the sector (sector trailer is the last block in sector)
+            sector_first_block = sector * 4
+            
+            # Authenticate with key A (most common default)
+            key = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]  # Factory default key
+            auth_success = self._pn532.mifare_classic_authenticate_block(
+                self._last_tag_uid, block_number, 0x60, key  # 0x60 = auth with key A
+            )
+            
+            if not auth_success:
+                logger.warning(f"Authentication failed for block {block_number}, trying to read anyway")
+            
             # Read data from the specified block
             data = self._pn532.mifare_classic_read_block(block_number)
             
@@ -222,6 +237,19 @@ class NFCReader:
             raise NFCWriteError("Data length must be exactly 16 bytes")
         
         try:
+            # Authenticate before writing - MIFARE blocks require authentication
+            # Calculate the sector (each sector has 4 blocks)
+            sector = block_number // 4
+            
+            # Authenticate with key A (most common default)
+            key = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]  # Factory default key
+            auth_success = self._pn532.mifare_classic_authenticate_block(
+                self._last_tag_uid, block_number, 0x60, key  # 0x60 = auth with key A
+            )
+            
+            if not auth_success:
+                raise NFCWriteError(f"Authentication failed for block {block_number}")
+            
             # Write data to the specified block
             self._pn532.mifare_classic_write_block(block_number, data)
             logger.info(f"Successfully wrote data to block {block_number}")
