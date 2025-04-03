@@ -7,7 +7,8 @@
     "frontend:dev": "cd frontend && npm run dev",
     "frontend:build": "cd frontend && npm run build",
     "backend:start": "cd backend && python3 app.py",
-    "start": "npm run frontend:build && npm run backend:start"
+    "start": "npm run frontend:build && npm run backend:start",
+    "network:dev": "cd frontend && npm run dev"
   },
   "workspaces": [
     "frontend"
