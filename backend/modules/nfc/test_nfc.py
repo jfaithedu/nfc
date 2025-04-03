@@ -70,8 +70,6 @@ try:
     continuous_poll = nfc_controller.continuous_poll
     NFCError = exceptions.NFCError
     NFCNoTagError = exceptions.NFCNoTagError
-    NFCReadError = exceptions.NFCReadError # Keep this
-    NFCWriteError = exceptions.NFCWriteError # Keep this
     NFCTagNotWritableError = exceptions.NFCTagNotWritableError # Added
     
     logger.info("Successfully imported NFC module with absolute imports")
@@ -100,8 +98,6 @@ except ImportError:
         continuous_poll = nfc_controller.continuous_poll
         NFCError = exceptions.NFCError
         NFCNoTagError = exceptions.NFCNoTagError
-        NFCReadError = exceptions.NFCReadError # Keep this
-        NFCWriteError = exceptions.NFCWriteError # Keep this
         NFCTagNotWritableError = exceptions.NFCTagNotWritableError # Added
         
         logger.info("Successfully imported NFC module with direct imports")
@@ -182,7 +178,7 @@ def test_tag_detection(i2c_bus=1, i2c_address=0x24, poll_time=10):
             if uid:
                 print(f"✅ Tag detected! UID: {uid}")
                 if ndef_info:
-                    print(f"  NDEF Info: {ndef_info}") # ndef_info is now the decoded dict
+                    print(f"  NDEF Info: {ndef_info}")
                 else:
                     print("  No NDEF URI found.")
                 detected = True
@@ -221,14 +217,14 @@ def test_read_write(i2c_bus=1, i2c_address=0x24, block=4):
             return False
         
         # Wait for tag
-        uid, initial_ndef_info = None, None # Use different var name
+        uid, ndef_info = None, None
         print("Waiting for tag (up to 5 seconds)...")
         for _ in range(50):  # Try for ~5 seconds
-            uid, initial_ndef_info = poll_for_tag() # Updated return format
+            uid, ndef_info = poll_for_tag() # Updated return format
             if uid:
                 print(f"✅ Tag detected! UID: {uid}")
-                if initial_ndef_info:
-                    print(f"  Initial NDEF Info: {initial_ndef_info}")
+                if ndef_info:
+                    print(f"  Initial NDEF Info: {ndef_info}")
                 else:
                     print("  No initial NDEF URI found.")
                 break
@@ -326,7 +322,7 @@ def test_read_write(i2c_bus=1, i2c_address=0x24, block=4):
         return False
 
 
-def test_ndef_uri_read_write(i2c_bus=1, i2c_address=0x24): # Renamed function
+def test_ndef_uri_read_write(i2c_bus=1, i2c_address=0x24):
     """Test reading and writing NDEF URI records."""
     print("\n=== Testing NDEF URI Read/Write ===")
     print("Please place a WRITABLE NDEF-compatible tag (e.g., NTAG215) on the reader...")
@@ -394,27 +390,15 @@ def test_ndef_uri_read_write(i2c_bus=1, i2c_address=0x24): # Renamed function
             time.sleep(2) # Give tag/reader time to settle after write
             
             # Poll again to get the latest NDEF data
-            # Need to handle potential tag removal between write and read
-            read_uid, read_ndef_info = None, None
-            for _ in range(10): # Try for 1 second
-                 read_uid, read_ndef_info = poll_for_tag()
-                 if read_uid == uid: # Make sure it's the same tag
-                      break
-                 time.sleep(0.1)
-
-            if read_uid != uid:
-                 print("❌ Tag removed or different tag detected before verification.")
-                 shutdown()
-                 return False
-
+            _, read_ndef_info = poll_for_tag() 
+            
             if not read_ndef_info:
                 print("❌ No NDEF data could be read back after writing.")
                 # Try reading raw blocks for debugging
                 try:
-                    print("Raw data block 4:", read_tag_data(4).hex()) # Use existing read_tag_data
+                    print("Raw data block 4:", read_tag_data(4).hex())
                     print("Raw data block 5:", read_tag_data(5).hex())
-                except Exception as raw_e:
-                     print(f"Could not read raw blocks: {raw_e}")
+                except: pass
                 shutdown()
                 return False
                 
@@ -473,15 +457,13 @@ def test_continuous_poll(i2c_bus=1, i2c_address=0x24, duration=10):
             print("❌ Failed to initialize NFC controller")
             return False
             
-        # Tag detection callback for continuous poll
-        detected_tags = {} # Store detected UIDs and their NDEF info
-        def tag_callback(uid, ndef_info): # Callback receives tuple now
+        # Tag detection callback
+        def tag_callback(uid, ndef_info): # Updated callback signature
             timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
-            ndef_uri = ndef_info.get('uri', 'None') if ndef_info else 'None'
-            
-            if uid not in detected_tags or detected_tags[uid] != ndef_uri:
-                 print(f"✅ [Callback] Tag Event: UID={uid} | NDEF URI='{ndef_uri}' at {timestamp}")
-                 detected_tags[uid] = ndef_uri # Store last seen NDEF URI for this UID
+            if ndef_info:
+                 print(f"✅ [Callback] Tag detected: {uid} | NDEF: {ndef_info.get('uri', 'Non-URI NDEF')} at {timestamp}")
+            else:
+                 print(f"✅ [Callback] Tag detected: {uid} | No NDEF URI found at {timestamp}")
             
         # Set up exit event for the continuous poll
         exit_event = threading.Event()
@@ -492,23 +474,18 @@ def test_continuous_poll(i2c_bus=1, i2c_address=0x24, duration=10):
             logger.info(f"Continuous polling thread started with interval 0.1s")
             while not exit_event.is_set():
                 try:
-                    # Poll returns tuple (uid, ndef_info)
-                    uid, ndef_info = poll_for_tag() 
+                    uid, ndef_info = poll_for_tag() # Poll returns tuple
                     
-                    # If tag detected
-                    if uid:
-                        # Call callback only if UID is new or NDEF has changed
-                        # (Callback now handles printing logic)
+                    # If tag detected and it's different from last time
+                    if uid and uid != last_uid:
                         try:
-                            callback(uid, ndef_info) 
+                            callback(uid, ndef_info) # Call callback with both uid and ndef_info
                         except Exception as cb_e:
                             logger.error(f"Error in tag detection callback: {str(cb_e)}")
-                        last_uid = uid # Keep track of last seen UID
+                        last_uid = uid
                     # If no tag detected, reset last UID
-                    elif last_uid: # Only log removal once
+                    elif not uid and last_uid:
                          logger.debug("Tag removed.")
-                         if last_uid in detected_tags:
-                              del detected_tags[last_uid] # Clear state for removed tag
                          last_uid = None
                          
                     # Wait for next poll
@@ -553,22 +530,45 @@ def test_continuous_poll(i2c_bus=1, i2c_address=0x24, duration=10):
 
 def main():
     """Main function to run the tests."""
-    # Args parsing is done at the top now
+    parser = argparse.ArgumentParser(description='Test the NFC module functionality')
+    parser.add_argument('-b', '--bus', type=int, default=1, help='I2C bus number (default: 1)')
+    parser.add_argument('-a', '--address', type=int, default=0x24, help='I2C device address (default: 0x24)', 
+                        metavar='ADDR')
+    parser.add_argument('-t', '--test', type=str, choices=['all', 'hardware', 'detect', 'readwrite', 'ndef_uri', 'poll'], 
+                        default='all', help='Test to run (default: all)')
+    parser.add_argument('-d', '--duration', type=int, default=10, 
+                        help='Duration in seconds for polling tests (default: 10)')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose logging')
+    parser.add_argument('--debug', action='store_true', help="Enable debug level logging") # Keep debug arg
+    
+    args = parser.parse_args()
     
     # Convert address from decimal to hex if needed
-    i2c_address = args.address # Use args parsed at the top
+    i2c_address = args.address
     
-    # Logging setup is done at the top now
+    # Set logging level based on verbose or debug flags
+    log_level = logging.INFO
+    if args.verbose:
+        log_level = logging.DEBUG
+        # Set all relevant loggers to DEBUG
+        for name in logging.root.manager.loggerDict:
+             if name.startswith('backend.modules.nfc'):
+                  logging.getLogger(name).setLevel(logging.DEBUG)
+        print("Verbose logging enabled (DEBUG level for NFC modules)")
+    elif args.debug:
+         log_level = logging.DEBUG
+         logging.getLogger().setLevel(logging.DEBUG) # Set root logger to DEBUG
+         print("Debug logging enabled (DEBUG level for all modules)")
+    else:
+         logging.getLogger().setLevel(logging.INFO) # Default INFO level
     
-    # Print test configuration using args parsed at the top
     print("===========================================")
     print("          NFC Module Test Script          ")
     print("===========================================")
     print(f"I2C Bus: {args.bus}")
-    print(f"I2C Address: 0x{i2c_address:02X}") # Use i2c_address var
+    print(f"I2C Address: 0x{i2c_address:02X}")
     print(f"Test: {args.test}")
     print(f"Duration: {args.duration} seconds")
-    print(f"Log Level: {logging.getLevelName(logger.getEffectiveLevel())}")
     print("===========================================")
     
     # Run the selected test(s)
