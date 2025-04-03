@@ -1,0 +1,27 @@
+# Core dependencies
+flask==2.0.1  # Web API framework
+flask-cors==3.0.10  # Cross-origin resource sharing
+waitress==2.0.0  # Production WSGI server
+python-dotenv==0.19.0  # Environment variable management
+
+# NFC reading
+RPi.GPIO==0.7.0  # GPIO access
+smbus2==0.4.1  # I2C communication
+spidev==3.5  # SPI communication (if needed by NFC HAT)
+
+# Media management
+yt-dlp==2021.10.22  # YouTube video/audio downloader
+ffmpeg-python==0.2.0  # Media processing
+
+# Audio and Bluetooth
+pydbus==0.6.0  # DBus interface for Bluetooth
+PyGObject==3.40.1  # Python bindings for GLib/GObject
+pulsectl==21.10.5  # PulseAudio control
+
+# Database
+sqlite3-api==0.1.0  # SQLite database management
+
+# Utility
+python-slugify==5.0.2  # URL/filename slugification
+PyJWT==2.1.0  # JWT token handling for API security
+apscheduler==3.8.0  # Scheduling tasks (e.g., cache cleanup)
