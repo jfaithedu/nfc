@@ -13,12 +13,33 @@ import logging
 import argparse
 from datetime import datetime
 
-# Setup logging
+# Parse command line arguments first to set up logging
+parser = argparse.ArgumentParser(description="Test NFC hardware and module functionality")
+parser.add_argument('-b', '--bus', type=int, default=1, help="I2C bus number (default: 1)")
+parser.add_argument('-a', '--address', type=int, default=0x24, help="I2C device address (default: 0x24)")
+parser.add_argument('-t', '--test', type=str, default='all', 
+                    choices=['hardware', 'detect', 'readwrite', 'ndef', 'poll', 'all'],
+                    help="Test to run (default: all)")
+parser.add_argument('-d', '--duration', type=int, default=10, help="Duration in seconds for polling tests (default: 10)")
+parser.add_argument('-v', '--verbose', action='store_true', help="Enable verbose debugging output")
+parser.add_argument('--debug', action='store_true', help="Enable debug level logging")
+args = parser.parse_args()
+
+# Setup logging based on arguments
+log_level = logging.DEBUG if args.debug or args.verbose else logging.INFO
 logging.basicConfig(
-    level=logging.INFO,
+    level=log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("NFCTest")
+
+# Enable verbose mode if requested
+if args.verbose:
+    # Set all loggers to DEBUG level
+    for name in logging.root.manager.loggerDict:
+        if name.startswith('backend.modules.nfc'):
+            logging.getLogger(name).setLevel(logging.DEBUG)
+    logger.debug("Verbose debugging enabled")
 
 # Ensure we can import our module
 current_dir = os.path.dirname(os.path.abspath(__file__))

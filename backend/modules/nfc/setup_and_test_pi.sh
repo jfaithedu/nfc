@@ -40,6 +40,18 @@ else
   echo "i2c-dev module already loaded"
 fi
 
+# Check if the user has permissions for I2C devices
+echo -e "\nChecking I2C permissions..."
+if ! groups | grep -q i2c; then
+  echo "Adding user to the i2c group for permissions..."
+  sudo usermod -a -G i2c $USER
+  echo "⚠️  You will need to log out and log back in for the I2C permissions to take effect."
+  echo "Alternatively, you can run the test script with sudo for now."
+  I2C_PERMISSION_FIXED=true
+else
+  echo "User already has I2C permissions"
+fi
+
 # Setup virtual environment
 echo -e "\n[3/4] Setting up Python virtual environment..."
 # Get project root directory (assuming backend/modules/nfc is the current script location)

@@ -125,11 +125,24 @@ class NFCReader:
             str: Version string or None if failed
         """
         try:
+            logger.info("Attempting to get NFC hardware version...")
+            # First try a simple read to test communication
+            try:
+                # Simple read test to verify basic I2C communication
+                logger.debug(f"Testing basic I2C read from address 0x{self.i2c_address:02X}")
+                test_read = self._device.read_byte(self.i2c_address)
+                logger.debug(f"Initial I2C read test result: 0x{test_read:02X}")
+            except Exception as e:
+                logger.error(f"Basic I2C read test failed: {str(e)}")
+                return None
+                
+            # Now try the actual command
             response = self.send_command(CMD_VERSION)
             if response and len(response) >= 2:
                 major = response[0]
                 minor = response[1]
                 return f"v{major}.{minor}"
+            logger.error("Got invalid response format from VERSION command")
             return None
         except Exception as e:
             logger.error(f"Error getting NFC hardware version: {str(e)}")
@@ -157,19 +170,35 @@ class NFCReader:
         if params:
             packet.extend(params)
         
+        logger.debug(f"Sending command: 0x{command:02X}, params: {params.hex() if params else 'None'}")
+        
         try:
             # Write command to device
-            for byte in packet:
-                self._device.write_byte(self.i2c_address, byte)
-                time.sleep(0.001)  # Small delay between bytes
+            logger.debug(f"Writing {len(packet)} bytes to device")
+            for i, byte in enumerate(packet):
+                try:
+                    self._device.write_byte(self.i2c_address, byte)
+                    logger.debug(f"Wrote byte {i+1}/{len(packet)}: 0x{byte:02X}")
+                    time.sleep(0.001)  # Small delay between bytes
+                except Exception as e:
+                    logger.error(f"Failed writing byte {i+1}/{len(packet)}: {str(e)}")
+                    raise
             
+            logger.debug("Waiting for device to process command...")
             time.sleep(0.05)  # Wait for processing
             
             # Read response length
-            response_length = self._device.read_byte(self.i2c_address)
+            try:
+                logger.debug("Reading response length...")
+                response_length = self._device.read_byte(self.i2c_address)
+                logger.debug(f"Response length: {response_length}")
+            except Exception as e:
+                logger.error(f"Failed to read response length: {str(e)}")
+                raise NFCHardwareError(f"Failed to read response length: {str(e)}")
             
             # If length is zero, return empty response
             if response_length == 0:
+                logger.debug("Response length is 0, returning empty response")
                 return b''
                 
             # Read response data
