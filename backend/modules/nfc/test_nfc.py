@@ -22,16 +22,42 @@ logger = logging.getLogger("NFCTest")
 
 # Ensure we can import our module
 current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(os.path.dirname(current_dir))
+module_dir = os.path.dirname(current_dir)
+parent_dir = os.path.dirname(module_dir)
+
+# Add both possible paths to sys.path
 if parent_dir not in sys.path:
     sys.path.append(parent_dir)
+if os.path.dirname(parent_dir) not in sys.path:
+    sys.path.append(os.path.dirname(parent_dir))
 
-# Import our NFC module
-from modules.nfc import (
-    initialize, shutdown, poll_for_tag, read_tag_data, write_tag_data,
-    get_hardware_info, authenticate_tag, read_ndef_data, write_ndef_data,
-    continuous_poll, NFCError, NFCNoTagError
-)
+# Try different import approaches
+try:
+    # Try package import first (when running from project root)
+    from modules.nfc import (
+        initialize, shutdown, poll_for_tag, read_tag_data, write_tag_data,
+        get_hardware_info, authenticate_tag, read_ndef_data, write_ndef_data,
+        continuous_poll, NFCError, NFCNoTagError
+    )
+    logger.info("Imported NFC module using package imports")
+except ImportError:
+    # If that fails, try direct import from current directory
+    sys.path.append(current_dir)
+    try:
+        from nfc_controller import (
+            initialize, shutdown, poll_for_tag, read_tag_data, write_tag_data,
+            get_hardware_info, authenticate_tag, read_ndef_data, write_ndef_data,
+            continuous_poll
+        )
+        from exceptions import NFCError, NFCNoTagError
+        logger.info("Imported NFC module using direct imports")
+    except ImportError as e:
+        logger.error(f"Failed to import NFC module: {e}")
+        print("ERROR: Failed to import the NFC module. Make sure:")
+        print("  1. You have installed the required dependencies (pip3 install -r requirements.txt)")
+        print("  2. You are running this script from the correct directory")
+        print("  3. The NFC module files are in the same directory as this script")
+        sys.exit(1)
 
 def test_hardware_connection(i2c_bus=1, i2c_address=0x24):
     """Test connecting to the NFC hardware."""

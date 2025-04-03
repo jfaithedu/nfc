@@ -42,7 +42,13 @@ fi
 
 # Install Python dependencies
 echo -e "\n[3/4] Installing Python dependencies..."
-pip3 install -r $(dirname "$0")/requirements.txt
+if ! command -v pip3 &> /dev/null; then
+    echo "pip3 not found. Installing python3-pip..."
+    sudo apt-get install -y python3-pip
+fi
+
+echo "Installing required Python packages..."
+sudo pip3 install -r $(dirname "$0")/requirements.txt
 
 # Run I2C detection
 echo -e "\n[4/4] Detecting I2C devices..."
