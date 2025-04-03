@@ -176,6 +176,42 @@ If you're using a PN532-based HAT:
    python3 -v test_nfc.py 2>&1 | grep smbus
    ```
 
+## NFC Read/Write Operation Errors
+
+### "Received unexpected command response!"
+
+This common error indicates a communication issue between the NFC hardware and tag:
+
+1. **Check tag compatibility**
+
+   - Different tag types require different commands
+   - See [TAG_COMPATIBILITY.md](./TAG_COMPATIBILITY.md) for details on supported tags
+   - Try using NTAG213/215/216 or MIFARE Ultralight tags which often have better compatibility
+
+2. **Check tag placement**
+
+   - Ensure the tag is properly centered on the NFC reader
+   - Hold the tag steady during read/write operations
+   - Try multiple positions if necessary
+
+3. **Check tag integrity**
+
+   - The tag may be damaged or have corrupted sectors
+   - Try scanning with an NFC-enabled phone to verify tag is functional
+
+4. **Lower-level debugging**
+
+   - Run with verbose mode: `python3 test_nfc.py -v --debug`
+   - Try accessing different blocks: `python3 test_nfc.py -t readwrite -b 6`
+   - Some blocks (esp. sector trailers) may be protected from reading/writing
+
+5. **Hardware configuration**
+   - Try adjusting the I2C clock speed: `sudo nano /boot/config.txt` and add/modify:
+     ```
+     dtparam=i2c_arm=on,i2c_arm_baudrate=100000
+     ```
+   - Verify proper power supply to the Raspberry Pi (at least 2.5A recommended)
+
 ## Raspberry Pi 5 Specific Issues
 
 If you're using a Raspberry Pi 5:
