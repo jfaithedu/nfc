@@ -12,6 +12,7 @@ Run with: python3 backend/modules/audio/interactive_test.py
 import os
 import sys
 import time
+import select
 import argparse
 from typing import Dict, List, Any, Optional
 
@@ -475,15 +476,10 @@ def main() -> None:
         print("Goodbye!")
 
 
-# Import select for non-blocking input
-import select
-
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
         print("\nProgram interrupted by user.")
-        shutdown()
     except Exception as e:
         print(f"Error: {e}")
-        shutdown()
