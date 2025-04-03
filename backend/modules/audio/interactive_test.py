@@ -17,43 +17,16 @@ import argparse
 from typing import Dict, List, Any, Optional
 
 # Add parent directory to path to allow imports
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
+script_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.abspath(os.path.join(script_dir, '../../../')))
 
-from backend.modules.audio import (
-    initialize,
-    shutdown,
-    play,
-    pause,
-    resume,
-    stop,
-    seek,
-    set_volume,
-    get_volume,
-    mute,
-    unmute,
-    get_playback_status,
-    is_playing,
-    play_system_sound,
-    play_error_sound,
-    play_success_sound,
-    
-    # Bluetooth functions
-    start_discovery,
-    stop_discovery,
-    get_discovered_devices,
-    connect_device,
-    disconnect_device,
-    forget_device,
-    get_connected_device,
-    is_device_connected,
-    get_paired_devices,
-    reconnect_last_device,
-    set_auto_reconnect,
-    get_bluetooth_status,
-    
-    # Testing
-    test_audio_output
-)
+# Import from audio module
+from backend.modules.audio.audio_controller import AudioController
+from backend.modules.audio.bluetooth_manager import get_bluetooth_status
+from backend.modules.audio.playback_handler import test_audio_output
+
+# Create a global controller
+audio_controller = None
 
 
 def print_header(title: str) -> None:
@@ -75,11 +48,12 @@ def print_device_info(device: Dict) -> None:
 
 def discover_devices() -> None:
     """Discover and display Bluetooth devices."""
+    global audio_controller
     print_header("Bluetooth Discovery")
     
     try:
         print("Starting discovery...")
-        if not start_discovery(timeout=30):
+        if not audio_controller.start_discovery(timeout=30):
             print("Failed to start discovery.")
             return
         
@@ -95,7 +69,7 @@ def discover_devices() -> None:
         except KeyboardInterrupt:
             print("\rDiscovery stopped by user.      ")
         
-        devices = get_discovered_devices()
+        devices = audio_controller.get_discovered_devices()
         print(f"\nDiscovered {len(devices)} devices:")
         
         for i, device in enumerate(devices):
@@ -103,14 +77,15 @@ def discover_devices() -> None:
             print_device_info(device)
         
     finally:
-        stop_discovery()
+        audio_controller.stop_discovery()
 
 
 def show_paired_devices() -> None:
     """Display paired Bluetooth devices."""
+    global audio_controller
     print_header("Paired Devices")
     
-    devices = get_paired_devices()
+    devices = audio_controller.get_paired_devices()
     if not devices:
         print("No paired devices found.")
         return
@@ -123,9 +98,10 @@ def show_paired_devices() -> None:
 
 def show_connected_device() -> None:
     """Display the currently connected Bluetooth device."""
+    global audio_controller
     print_header("Connected Device")
     
-    device = get_connected_device()
+    device = audio_controller.get_connected_device()
     if not device:
         print("No device is currently connected.")
         return
@@ -136,10 +112,11 @@ def show_connected_device() -> None:
 
 def connect_to_device() -> None:
     """Connect to a Bluetooth device."""
+    global audio_controller
     print_header("Connect to Device")
     
     # Show paired devices first
-    devices = get_paired_devices()
+    devices = audio_controller.get_paired_devices()
     if devices:
         print("Paired devices:")
         for i, device in enumerate(devices):
@@ -164,11 +141,11 @@ def connect_to_device() -> None:
             return
     
     print(f"Connecting to {address}...")
-    if connect_device(address):
+    if audio_controller.connect_device(address):
         print("Successfully connected!")
         
         # Show connected device details
-        device = get_connected_device()
+        device = audio_controller.get_connected_device()
         if device:
             print_device_info(device)
     else:
@@ -177,15 +154,16 @@ def connect_to_device() -> None:
 
 def disconnect_current_device() -> None:
     """Disconnect from the current Bluetooth device."""
+    global audio_controller
     print_header("Disconnect Device")
     
-    device = get_connected_device()
+    device = audio_controller.get_connected_device()
     if not device:
         print("No device is currently connected.")
         return
     
     print(f"Disconnecting from {device.get('name')} ({device.get('address')})...")
-    if disconnect_device():
+    if audio_controller.disconnect_device():
         print("Successfully disconnected.")
     else:
         print("Failed to disconnect.")
@@ -193,10 +171,11 @@ def disconnect_current_device() -> None:
 
 def forget_paired_device() -> None:
     """Forget (unpair) a Bluetooth device."""
+    global audio_controller
     print_header("Forget Device")
     
     # Show paired devices
-    devices = get_paired_devices()
+    devices = audio_controller.get_paired_devices()
     if not devices:
         print("No paired devices found.")
         return
@@ -229,7 +208,7 @@ def forget_paired_device() -> None:
         return
     
     print(f"Forgetting device {address}...")
-    if forget_device(address):
+    if audio_controller.forget_device(address):
         print("Device successfully forgotten.")
     else:
         print("Failed to forget device.")
@@ -237,15 +216,16 @@ def forget_paired_device() -> None:
 
 def test_audio() -> None:
     """Test audio output."""
+    global audio_controller
     print_header("Audio Output Test")
     
-    device = get_connected_device()
+    device = audio_controller.get_connected_device()
     if device:
         print(f"Testing audio output to {device.get('name')} ({device.get('address')})...")
     else:
         print("Testing audio output to default audio device...")
     
-    if test_audio_output():
+    if audio_controller.test_audio_output():
         print("Audio test successful!")
     else:
         print("Audio test failed.")
@@ -253,6 +233,7 @@ def test_audio() -> None:
 
 def play_audio_file() -> None:
     """Play an audio file."""
+    global audio_controller
     print_header("Play Audio File")
     
     print("Enter the path to an audio file to play:")
@@ -263,13 +244,13 @@ def play_audio_file() -> None:
         return
     
     print(f"Playing {file_path}...")
-    if play(file_path):
+    if audio_controller.play(file_path):
         print("Playback started.")
         print("Commands: [p]ause, [r]esume, [s]top, [q]uit playback")
         
-        while is_playing():
+        while audio_controller.is_playing():
             # Show playback status
-            status = get_playback_status()
+            status = audio_controller.get_playback_status()
             position = status.get('position', 0)
             duration = status.get('duration', 0)
             
@@ -285,13 +266,13 @@ def play_audio_file() -> None:
             if sys.stdin in select.select([sys.stdin], [], [], 0.5)[0]:
                 cmd = sys.stdin.read(1).lower()
                 if cmd == 'p':
-                    pause()
+                    audio_controller.pause()
                     print("\nPlayback paused.")
                 elif cmd == 'r':
-                    resume()
+                    audio_controller.resume()
                     print("\nPlayback resumed.")
                 elif cmd == 's' or cmd == 'q':
-                    stop()
+                    audio_controller.stop()
                     print("\nPlayback stopped.")
                     break
             
@@ -303,9 +284,10 @@ def play_audio_file() -> None:
 
 def volume_control() -> None:
     """Control audio volume."""
+    global audio_controller
     print_header("Volume Control")
     
-    current = get_volume()
+    current = audio_controller.get_volume()
     print(f"Current volume: {current}%")
     
     print("\nOptions:")
@@ -319,19 +301,19 @@ def volume_control() -> None:
     
     if choice == '1':
         new_level = min(100, current + 10)
-        set_volume(new_level)
+        audio_controller.set_volume(new_level)
         print(f"Volume increased to {new_level}%")
     
     elif choice == '2':
         new_level = max(0, current - 10)
-        set_volume(new_level)
+        audio_controller.set_volume(new_level)
         print(f"Volume decreased to {new_level}%")
     
     elif choice == '3':
         level = input("Enter volume level (0-100): ").strip()
         if level.isdigit():
             new_level = max(0, min(100, int(level)))
-            set_volume(new_level)
+            audio_controller.set_volume(new_level)
             print(f"Volume set to {new_level}%")
         else:
             print("Invalid input.")
@@ -339,10 +321,10 @@ def volume_control() -> None:
     elif choice == '4':
         # Check if already muted based on volume
         if current == 0:
-            set_volume(50)  # Default to 50% when unmuting
+            audio_controller.set_volume(50)  # Default to 50% when unmuting
             print("Unmuted. Volume set to 50%")
         else:
-            mute()
+            audio_controller.mute()
             print("Muted.")
     
     elif choice != '5':
@@ -351,9 +333,10 @@ def volume_control() -> None:
 
 def show_bluetooth_status() -> None:
     """Display Bluetooth system status."""
+    global audio_controller
     print_header("Bluetooth Status")
     
-    status = get_bluetooth_status()
+    status = audio_controller.get_bluetooth_status()
     
     print("Bluetooth System Status:")
     print(f"  Available: {status.get('available', False)}")
@@ -370,9 +353,10 @@ def show_bluetooth_status() -> None:
 
 def toggle_auto_reconnect() -> None:
     """Toggle automatic Bluetooth reconnection."""
+    global audio_controller
     print_header("Auto-Reconnect Setting")
     
-    status = get_bluetooth_status()
+    status = audio_controller.get_bluetooth_status()
     current = status.get('auto_reconnect', False)
     
     print(f"Auto-reconnect is currently: {'Enabled' if current else 'Disabled'}")
@@ -380,7 +364,7 @@ def toggle_auto_reconnect() -> None:
     
     choice = input().strip().lower()
     if choice == 'y':
-        set_auto_reconnect(not current)
+        audio_controller.set_auto_reconnect(not current)
         print(f"Auto-reconnect {'enabled' if not current else 'disabled'}.")
     else:
         print("Setting unchanged.")
@@ -388,16 +372,22 @@ def toggle_auto_reconnect() -> None:
 
 def main() -> None:
     """Main function for the interactive test script."""
+    global audio_controller
+    
     parser = argparse.ArgumentParser(description="Audio module interactive test")
     parser.add_argument("--no-init", action="store_true", help="Skip module initialization")
     args = parser.parse_args()
     
-    # Initialize module if not skipping
-    if not args.no_init:
-        print("Initializing audio module...")
-        if not initialize():
-            print("Failed to initialize audio module.")
-            return
+    # Initialize the controller
+    try:
+        print("Initializing audio controller...")
+        audio_controller = AudioController()
+        if not audio_controller.initialize():
+            print("Failed to initialize audio controller.")
+            return 1
+    except Exception as e:
+        print(f"Initialization error: {e}")
+        return 1
     
     try:
         while True:
@@ -407,8 +397,8 @@ def main() -> None:
             print_header("Audio Module Interactive Test")
             
             # Show connection status
-            status = get_bluetooth_status()
-            device = get_connected_device()
+            status = audio_controller.get_bluetooth_status()
+            device = audio_controller.get_connected_device()
             
             if device:
                 print(f"Connected to: {device.get('name')} ({device.get('address')})")
@@ -416,7 +406,7 @@ def main() -> None:
                 print("No Bluetooth device connected")
             
             print(f"BlueALSA status: {'Running' if status.get('bluealsa_running') else 'Not running'}")
-            print(f"Volume: {get_volume()}%")
+            print(f"Volume: {audio_controller.get_volume()}%")
             
             # Main menu
             print("\nOptions:")
@@ -467,19 +457,22 @@ def main() -> None:
             print("\nPress Enter to continue...")
             input()
     
-    finally:
-        # Clean up
-        if not args.no_init:
-            print("Shutting down audio module...")
-            shutdown()
-        
-        print("Goodbye!")
-
-
-if __name__ == "__main__":
-    try:
-        main()
     except KeyboardInterrupt:
         print("\nProgram interrupted by user.")
     except Exception as e:
         print(f"Error: {e}")
+    finally:
+        # Clean up
+        if audio_controller:
+            print("Shutting down audio controller...")
+            try:
+                audio_controller.shutdown()
+            except Exception as e:
+                print(f"Error during shutdown: {e}")
+            
+        print("Goodbye!")
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
