@@ -288,52 +288,62 @@ def test_nfc():
                 print("  Could not retrieve hardware information")
             
         elif choice == '2':
-            # Poll for NFC tag (once)
+            # Poll for NFC tag (once) - using approach from test_tag_detection in test_nfc.py
             print_subheader("Polling for NFC Tag")
+            print("Please place a tag on the reader...")
             print("Waiting for tag (10 seconds)...")
             
             # Try for up to 10 seconds
-            tag_found = False
-            for i in range(10):
-                result = nfc_controller.poll_for_tag(read_ndef=True)
-                
-                if result is not None:
-                    # Check if result is a tuple (uid, ndef_info) or just a UID string
-                    if isinstance(result, tuple) and len(result) == 2:
-                        tag_uid, ndef_info = result
-                    else:
-                        # If it's not a tuple, assume it's just the UID
-                        tag_uid = result
-                        ndef_info = None
+            start_time = time.time()
+            detected = False
+            
+            while time.time() - start_time < 10:
+                # Just get the UID first, like in test_nfc.py
+                uid = nfc_controller.poll_for_tag(read_ndef=False)
+                if uid:
+                    detected = True
+                    print(f"\n✅ Tag detected! UID: {uid}")
                     
-                    if tag_uid:
-                        tag_found = True
-                        print(f"\n✅ Tag detected: {tag_uid}")
-                        
-                        # Check if tag has media association
-                        media_info = db_manager.get_media_for_tag(tag_uid)
-                        if media_info:
-                            print(f"  Tag is associated with media: {media_info.get('title')}")
-                        else:
-                            print("  Tag is not associated with any media")
-                        
-                        # Check for NDEF data
-                        if ndef_info:
+                    # Check if tag has media association
+                    media_info = db_manager.get_media_for_tag(uid)
+                    if media_info:
+                        print(f"  Tag is associated with media: {media_info.get('title')}")
+                    else:
+                        print("  Tag is not associated with any media")
+                    
+                    # Now try to read NDEF data separately
+                    try:
+                        ndef_data = nfc_controller.read_ndef_data()
+                        if ndef_data:
                             print("\nNDEF data found:")
-                            print(f"  Type: {ndef_info.get('type')}")
-                            if ndef_info.get('type') == 'uri':
-                                print(f"  URI: {ndef_info.get('uri')}")
-                            elif ndef_info.get('type') == 'text':
-                                print(f"  Text: {ndef_info.get('text')}")
+                            print(f"  Type: {ndef_data.get('type', 'Unknown')}")
+                            
+                            if 'records' in ndef_data:
+                                for i, record in enumerate(ndef_data['records']):
+                                    print(f"\n  Record {i+1}:")
+                                    if 'decoded' in record:
+                                        record_type = record['decoded'].get('type')
+                                        print(f"    Type: {record_type}")
+                                        
+                                        if record_type == 'uri':
+                                            uri = record['decoded'].get('uri')
+                                            print(f"    URI: {uri}")
+                                        elif record_type == 'text':
+                                            text = record['decoded'].get('text')
+                                            print(f"    Text: {text}")
+                                    else:
+                                        print(f"    Raw: {record}")
                         else:
                             print("\nNo NDEF data found on tag")
-                        
-                        break
+                    except Exception as e:
+                        print(f"\nCould not read NDEF data: {e}")
+                    
+                    break
                 
                 print(".", end="", flush=True)
-                time.sleep(1)
+                time.sleep(0.1)
             
-            if not tag_found:
+            if not detected:
                 print("\n❌ No tag detected within 10 seconds")
             
         elif choice == '3':
@@ -437,86 +447,79 @@ def test_nfc():
         
         wait_for_key()
 
+def tag_callback(uid, ndef_info=None):
+    """Callback function for tag detection."""
+    print(f"\n✅ Tag detected: {uid}")
+    
+    # Check if tag has media association
+    media_info = db_manager.get_media_for_tag(uid)
+    if media_info:
+        print(f"  Tag associated with: {media_info.get('title', 'Unknown')}")
+        
+        # Get the media path and play
+        try:
+            print("  Preparing media for playback...")
+            media_path = media_manager.prepare_media(media_info)
+            print(f"  Playing {media_path}...")
+            audio_controller.play(media_path)
+        except Exception as e:
+            print(f"  ❌ Error playing media: {e}")
+    else:
+        print("  No media associated with this tag")
+        
+        # Check for NDEF URL
+        if ndef_info and ndef_info.get('type') == 'uri':
+            url = ndef_info.get('uri')
+            print(f"  Found URL in tag: {url}")
+            
+            # Check if it's a YouTube URL
+            if 'youtube.com' in url or 'youtu.be' in url:
+                try:
+                    print("  Getting YouTube info...")
+                    youtube_info = media_manager.get_media_info(url)
+                    print(f"  Title: {youtube_info.get('title')}")
+                    
+                    # Ask if we should play it
+                    play_it = input("  Play this YouTube video? (y/n): ").strip().lower() == 'y'
+                    if play_it:
+                        print("  Adding to database...")
+                        media_id = db_manager.add_or_get_media_by_url(url, tag_uid=uid)
+                        if media_id:
+                            media_info = db_manager.get_media_info(media_id)
+                            print("  Preparing media for playback...")
+                            media_path = media_manager.prepare_media(media_info)
+                            print(f"  Playing {media_path}...")
+                            audio_controller.play(media_path)
+                        else:
+                            print("  ❌ Failed to add media to database")
+                except Exception as e:
+                    print(f"  ❌ Error processing YouTube URL: {e}")
+
 def nfc_detection_worker():
     """Worker function for continuous tag detection."""
     global nfc_detection_running
-    last_detected_tag = None
     
+    # Similar implementation to test_continuous_poll in test_nfc.py
+    exit_event = threading.Event()
+    
+    # Start the continuous polling
+    poll_thread = threading.Thread(
+        target=nfc_controller.continuous_poll,
+        args=(tag_callback, 0.1, exit_event, True)  # Pass True for read_ndef
+    )
+    poll_thread.daemon = True
+    poll_thread.start()
+    
+    # Run until stopped
     while nfc_detection_running:
-        try:
-            # Poll for tag
-            result = nfc_controller.poll_for_tag(read_ndef=True)
-            
-            # Handle different return types
-            if result is None:
-                # No tag detected, wait briefly and try again
-                time.sleep(0.1)
-                continue
-            
-            # Check if result is a tuple (uid, ndef_info) or just a UID string
-            if isinstance(result, tuple) and len(result) == 2:
-                tag_uid, ndef_info = result
-            else:
-                # If it's not a tuple, assume it's just the UID
-                tag_uid = result
-                ndef_info = None
-            
-            if tag_uid and tag_uid != last_detected_tag:
-                print(f"\n✅ Tag detected: {tag_uid}")
-                
-                # Check if tag has media association
-                media_info = db_manager.get_media_for_tag(tag_uid)
-                if media_info:
-                    print(f"  Tag associated with: {media_info.get('title', 'Unknown')}")
-                    
-                    # Get the media path and play
-                    try:
-                        print("  Preparing media for playback...")
-                        media_path = media_manager.prepare_media(media_info)
-                        print(f"  Playing {media_path}...")
-                        audio_controller.play(media_path)
-                    except Exception as e:
-                        print(f"  ❌ Error playing media: {e}")
-                else:
-                    print("  No media associated with this tag")
-                    
-                    # Check for NDEF URL
-                    if ndef_info and ndef_info.get('type') == 'uri':
-                        url = ndef_info.get('uri')
-                        print(f"  Found URL in tag: {url}")
-                        
-                        # Check if it's a YouTube URL
-                        if 'youtube.com' in url or 'youtu.be' in url:
-                            try:
-                                print("  Getting YouTube info...")
-                                youtube_info = media_manager.get_media_info(url)
-                                print(f"  Title: {youtube_info.get('title')}")
-                                
-                                # Ask if we should play it
-                                play_it = input("  Play this YouTube video? (y/n): ").strip().lower() == 'y'
-                                if play_it:
-                                    print("  Adding to database...")
-                                    media_id = db_manager.add_or_get_media_by_url(url, tag_uid=tag_uid)
-                                    if media_id:
-                                        media_info = db_manager.get_media_info(media_id)
-                                        print("  Preparing media for playback...")
-                                        media_path = media_manager.prepare_media(media_info)
-                                        print(f"  Playing {media_path}...")
-                                        audio_controller.play(media_path)
-                                    else:
-                                        print("  ❌ Failed to add media to database")
-                            except Exception as e:
-                                print(f"  ❌ Error processing YouTube URL: {e}")
-                
-                last_detected_tag = tag_uid
-            
-            # Small delay to prevent CPU overuse
-            time.sleep(0.1)
-            
-        except Exception as e:
-            print(f"Error in NFC detection worker: {e}")
-            time.sleep(1)
+        time.sleep(0.1)
+        if not poll_thread.is_alive():
+            print("Polling thread stopped unexpectedly")
+            nfc_detection_running = False
     
+    # Stop polling
+    exit_event.set()
+    poll_thread.join(timeout=2)
     print("NFC detection worker stopped")
 
 def stop_nfc_detection():
