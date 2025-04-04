@@ -313,6 +313,25 @@ def remove_tag_association(tag_uid):
         logger.error(f"Error removing tag association for {tag_uid}: {str(e)}")
         raise DatabaseQueryError(f"Failed to remove tag association: {str(e)}")
 
+def remove_tag_media_association(tag_uid):
+    """
+    Remove the media association for a tag but keep the tag in the database.
+
+    Args:
+        tag_uid (str): The UID of the NFC tag
+
+    Returns:
+        bool: True if association was removed
+    """
+    try:
+        with DatabaseConnection(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE tags SET media_id = NULL WHERE uid = ?", (tag_uid,))
+            return cursor.rowcount > 0
+    except Exception as e:
+        logger.error(f"Error removing tag-media association for {tag_uid}: {str(e)}")
+        raise DatabaseQueryError(f"Failed to remove tag-media association: {str(e)}")
+
 def get_tags_for_media(media_id):
     """
     Get all tags associated with a specific media.
