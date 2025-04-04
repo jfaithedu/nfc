@@ -469,7 +469,10 @@ def test_nfc():
         wait_for_key()
 
 def tag_callback(uid, ndef_info=None):
-    """Callback function for tag detection."""
+    """
+    Callback function for tag detection.
+    Handles both callback signatures (with and without NDEF info).
+    """
     print(f"\n✅ Tag detected: {uid}")
     
     # Check if tag has media association
@@ -488,23 +491,45 @@ def tag_callback(uid, ndef_info=None):
     else:
         print("  No media associated with this tag")
         
-        # Check for NDEF URL
-        if ndef_info and ndef_info.get('type') == 'uri':
-            url = ndef_info.get('uri')
-            print(f"  Found URL in tag: {url}")
+        # Check for NDEF URL - we might need to read NDEF data separately if it wasn't provided
+        if ndef_info is None:
+            try:
+                ndef_info = nfc_controller.read_ndef_data()
+                print("  Read NDEF data separately")
+            except Exception as e:
+                print(f"  Could not read NDEF data: {e}")
+                ndef_info = None
+        
+        # Process NDEF data if available
+        if ndef_info:
+            # Look for URI records in NDEF data
+            uri = None
             
-            # Check if it's a YouTube URL
-            if 'youtube.com' in url or 'youtu.be' in url:
+            # Try to get URI directly from NDEF structure
+            if ndef_info.get('type') == 'uri':
+                uri = ndef_info.get('uri')
+                print(f"  Found URL in tag: {uri}")
+                
+            # Otherwise, search through records for a URI
+            elif 'records' in ndef_info:
+                for record in ndef_info['records']:
+                    if 'decoded' in record and record['decoded'].get('type') == 'uri':
+                        uri = record['decoded'].get('uri')
+                        print(f"  Found URL in tag records: {uri}")
+                        break
+            
+            # If we have a URI, check if it's a YouTube URL
+            if uri and ('youtube.com' in uri or 'youtu.be' in uri):
                 try:
                     print("  Getting YouTube info...")
-                    youtube_info = media_manager.get_media_info(url)
+                    youtube_info = media_manager.get_media_info(uri)
                     print(f"  Title: {youtube_info.get('title')}")
                     
                     # Ask if we should play it
                     play_it = input("  Play this YouTube video? (y/n): ").strip().lower() == 'y'
                     if play_it:
                         print("  Adding to database...")
-                        media_id = db_manager.add_or_get_media_by_url(url, tag_uid=uid)
+                        media_id = db_manager.add_or_get_media_by_url(uri, tag_uid=uid)
                         if media_id:
                             media_info = db_manager.get_media_info(media_id)
                             print("  Preparing media for playback...")
@@ -520,28 +545,28 @@ def nfc_detection_worker():
     """Worker function for continuous tag detection."""
     global nfc_detection_running
     
-    # Similar implementation to test_continuous_poll in test_nfc.py
+    # Create an exit event to signal the polling thread to stop
     exit_event = threading.Event()
     
-    # Start the continuous polling
-    poll_thread = threading.Thread(
-        target=nfc_controller.continuous_poll,
-        args=(tag_callback, 0.1, exit_event, True)  # Pass True for read_ndef
-    )
-    poll_thread.daemon = True
-    poll_thread.start()
+    print("Starting continuous NFC tag detection...")
     
-    # Run until stopped
-    while nfc_detection_running:
-        time.sleep(0.1)
-        if not poll_thread.is_alive():
-            print("Polling thread stopped unexpectedly")
-            nfc_detection_running = False
-    
-    # Stop polling
-    exit_event.set()
-    poll_thread.join(timeout=2)
-    print("NFC detection worker stopped")
+    try:
+        # Use the approach from test_continuous_poll in test_nfc.py
+        # Instead of creating another thread, we'll directly call continuous_poll
+        # in this thread which was started from the main thread
+        nfc_controller.continuous_poll(
+            callback=tag_callback,
+            interval=0.1,
+            exit_event=exit_event,
+            read_ndef=True
+        )
+    except Exception as e:
+        print(f"❌ Error during NFC detection: {e}")
+    finally:
+        # Signal the exit event in case it wasn't already
+        exit_event.set()
+        print("NFC detection worker stopped")
+        nfc_detection_running = False
 
 def stop_nfc_detection():
     """Stop NFC tag detection."""
