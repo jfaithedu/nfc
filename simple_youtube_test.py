@@ -51,11 +51,15 @@ def download_youtube_audio(url, output_path=None):
     # Prepare yt-dlp command
     cmd = [
         "yt-dlp",
-        "-x",  # Extract audio
+        "-f", "bestaudio",  # Best audio format
+        "--extract-audio",  # Extract audio
         "--audio-format", "mp3",  # Convert to mp3
         "--audio-quality", "192K",  # Use 192K quality
         "--no-cache-dir",  # Don't use cache
         "--no-cookies",  # Don't use cookies
+        "--embed-metadata",  # Include metadata
+        "--prefer-ffmpeg",  # Prefer using ffmpeg for conversion
+        "--ignore-errors",  # Ignore errors during extraction
         "-o", output_path,  # Output file
         url  # YouTube URL
     ]
