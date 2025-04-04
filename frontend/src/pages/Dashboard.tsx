@@ -11,6 +11,7 @@ import {
 } from '../components/ui/card';
 import { getUptime } from '../lib/utils';
 
+// Define interfaces for data structures used in the dashboard
 interface SystemStatus {
   uptime: number;
   component_status: {
@@ -37,13 +38,23 @@ interface MediaStats {
   cache_size_mb: number;
 }
 
+interface Tag {
+  uid: string;
+  name?: string | null;
+  description?: string | null;
+  media_id?: string | null;
+  created_at: string;
+  last_used?: string | null;
+  // Add other potential tag properties if known from API
+}
+
 export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [tagCount, setTagCount] = useState<TagCount | null>(null);
   const [mediaStats, setMediaStats] = useState<MediaStats | null>(null);
-  const [lastDetectedTag, setLastDetectedTag] = useState<any>(null);
+  const [lastDetectedTag, setLastDetectedTag] = useState<Tag | null>(null);
 
   useEffect(() => {
     const fetchDashboardData = async () => {
@@ -63,7 +74,7 @@ export default function Dashboard() {
           const tags = tagsRes.data.data.tags;
           setTagCount({
             total: tags.length,
-            active: tags.filter((tag: any) => tag.media_id).length
+            active: tags.filter((tag: Tag) => tag.media_id).length
           });
         }
 
@@ -84,8 +95,9 @@ export default function Dashboard() {
           setLastDetectedTag(lastTagRes.data.data.last_detected);
         }
 
-      } catch (err: any) {
-        console.error(err);
+      } catch (err: unknown) {
+        console.error('Error fetching dashboard data:', err);
+        // Set a generic error message, or inspect 'err' if needed (safely)
         setError('Failed to load dashboard data');
       } finally {
         setIsLoading(false);
@@ -190,8 +202,8 @@ export default function Dashboard() {
                 <div className="flex items-center justify-between">
                   <span>NFC Reader</span>
                   <span className={`px-2 py-1 rounded-full text-xs ${systemStatus.component_status.nfc
-                      ? 'bg-green-100 text-green-800'
-                      : 'bg-red-100 text-red-800'
+                    ? 'bg-green-100 text-green-800'
+                    : 'bg-red-100 text-red-800'
                     }`}>
                     {systemStatus.component_status.nfc ? 'Online' : 'Offline'}
                   </span>
@@ -200,8 +212,8 @@ export default function Dashboard() {
                 <div className="flex items-center justify-between">
                   <span>API Server</span>
                   <span className={`px-2 py-1 rounded-full text-xs ${systemStatus.component_status.api
-                      ? 'bg-green-100 text-green-800'
-                      : 'bg-red-100 text-red-800'
+                    ? 'bg-green-100 text-green-800'
+                    : 'bg-red-100 text-red-800'
                     }`}>
                     {systemStatus.component_status.api ? 'Online' : 'Offline'}
                   </span>
@@ -210,8 +222,8 @@ export default function Dashboard() {
                 <div className="flex items-center justify-between">
                   <span>Bluetooth</span>
                   <span className={`px-2 py-1 rounded-full text-xs ${systemStatus.component_status.bluetooth
-                      ? 'bg-green-100 text-green-800'
-                      : 'bg-red-100 text-red-800'
+                    ? 'bg-green-100 text-green-800'
+                    : 'bg-red-100 text-red-800'
                     }`}>
                     {systemStatus.component_status.bluetooth ? 'Online' : 'Offline'}
                   </span>
@@ -220,8 +232,8 @@ export default function Dashboard() {
                 <div className="flex items-center justify-between">
                   <span>Media Service</span>
                   <span className={`px-2 py-1 rounded-full text-xs ${systemStatus.component_status.media
-                      ? 'bg-green-100 text-green-800'
-                      : 'bg-red-100 text-red-800'
+                    ? 'bg-green-100 text-green-800'
+                    : 'bg-red-100 text-red-800'
                     }`}>
                     {systemStatus.component_status.media ? 'Online' : 'Offline'}
                   </span>

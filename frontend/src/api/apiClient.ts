@@ -1,6 +1,45 @@
 import axios from 'axios';
 import { getApiUrl } from '../lib/utils';
 
+// Define interfaces for API data structures
+interface TagData {
+  name: string;
+  description?: string;
+  media_id?: string | null;
+  // Add other potential tag properties if known
+}
+
+interface YouTubeData {
+  url: string;
+  // Add other potential YouTube data properties if known
+}
+
+interface SettingsData {
+  // Define properties based on what settings can be updated
+  // Example:
+  pin_enabled?: boolean;
+  auto_play_delay?: number;
+  // ... other settings based on actual API
+}
+
+interface NfcWriteStartData {
+  media_id: string;
+  // Add other potential properties if needed
+}
+
+interface NfcWriteTagData {
+  // Define the structure of data written to a tag
+  // Example:
+  content: string; // Adjust based on actual data structure
+}
+
+interface NdefData {
+  // Define the structure for NDEF data
+  // Example:
+  records: Array<{ type: string; payload: string }>; // Adjust based on actual data structure
+}
+
+
 // Create axios instance with base URL that will work with the dynamic IP
 const apiClient = axios.create({
   baseURL: getApiUrl(),
@@ -32,8 +71,8 @@ export const api = {
   tags: {
     getAll: () => apiClient.get('/api/tags'),
     getById: (uid: string) => apiClient.get(`/api/tags/${uid}`),
-    create: (data: any) => apiClient.post('/api/tags', data),
-    update: (uid: string, data: any) => apiClient.put(`/api/tags/${uid}`, data),
+    create: (data: TagData) => apiClient.post('/api/tags', data),
+    update: (uid: string, data: Partial<TagData>) => apiClient.put(`/api/tags/${uid}`, data),
     delete: (uid: string) => apiClient.delete(`/api/tags/${uid}`),
     associate: (uid: string, mediaId: string) =>
       apiClient.post(`/api/tags/${uid}/associate`, { media_id: mediaId }),
@@ -47,7 +86,7 @@ export const api = {
     getAll: (limit = 20, offset = 0) =>
       apiClient.get(`/api/media?limit=${limit}&offset=${offset}`),
     getById: (id: string) => apiClient.get(`/api/media/${id}`),
-    addYouTube: (data: any) => apiClient.post('/api/media/youtube', data),
+    addYouTube: (data: YouTubeData) => apiClient.post('/api/media/youtube', data),
     upload: (formData: FormData) =>
       apiClient.post('/api/media/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -71,7 +110,7 @@ export const api = {
     disconnectBluetooth: () => apiClient.post('/api/system/bluetooth/disconnect'),
     setVolume: (volume: number) => apiClient.post('/api/system/volume', { volume }),
     getSettings: () => apiClient.get('/api/system/settings'),
-    updateSettings: (settings: any) => apiClient.put('/api/system/settings', settings),
+    updateSettings: (settings: SettingsData) => apiClient.put('/api/system/settings', settings),
     changePin: (currentPin: string, newPin: string) =>
       apiClient.post('/api/system/change_pin', { current_pin: currentPin, new_pin: newPin }),
     backup: () => apiClient.post('/api/system/backup', {}, { responseType: 'blob' }),
@@ -88,13 +127,13 @@ export const api = {
 
   // NFC writer endpoints
   nfc: {
-    startWriteMode: (data: any) => apiClient.post('/api/nfc/write/start', data),
+    startWriteMode: (data: NfcWriteStartData) => apiClient.post('/api/nfc/write/start', data),
     stopWriteMode: () => apiClient.post('/api/nfc/write/stop'),
     getWriteStatus: () => apiClient.get('/api/nfc/write/status'),
-    writeToTag: (uid: string, data: any) => apiClient.post(`/api/nfc/write/${uid}`, { data }),
+    writeToTag: (uid: string, data: NfcWriteTagData) => apiClient.post(`/api/nfc/write/${uid}`, { data }),
     readRaw: () => apiClient.get('/api/nfc/read'),
     readNdef: () => apiClient.get('/api/nfc/ndef/read'),
-    writeNdef: (data: any) => apiClient.post('/api/nfc/ndef/write', data),
+    writeNdef: (data: NdefData) => apiClient.post('/api/nfc/ndef/write', data),
   },
 
   // Health check

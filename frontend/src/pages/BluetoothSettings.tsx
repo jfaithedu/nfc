@@ -92,9 +92,10 @@ export default function BluetoothSettings() {
             } else {
                 setError(`Failed to pair with device: ${response.data.error?.message || 'Unknown error'}`);
             }
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error('Error pairing with device:', err);
-            setError(`Failed to pair with device: ${err.message || 'Unknown error'}`);
+            const message = err instanceof Error ? err.message : 'Unknown error';
+            setError(`Failed to pair with device: ${message}`);
         } finally {
             setActionInProgress(null);
         }
@@ -113,9 +114,10 @@ export default function BluetoothSettings() {
             } else {
                 setError(`Failed to connect to device: ${response.data.error?.message || 'Unknown error'}`);
             }
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error('Error connecting to device:', err);
-            setError(`Failed to connect to device: ${err.message || 'Unknown error'}`);
+            const message = err instanceof Error ? err.message : 'Unknown error';
+            setError(`Failed to connect to device: ${message}`);
         } finally {
             setActionInProgress(null);
         }
@@ -137,9 +139,10 @@ export default function BluetoothSettings() {
             } else {
                 setError(`Failed to disconnect device: ${response.data.error?.message || 'Unknown error'}`);
             }
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error('Error disconnecting device:', err);
-            setError(`Failed to disconnect device: ${err.message || 'Unknown error'}`);
+            const message = err instanceof Error ? err.message : 'Unknown error';
+            setError(`Failed to disconnect device: ${message}`);
         } finally {
             setActionInProgress(null);
         }
@@ -318,8 +321,8 @@ const SignalIcon = ({ strength }: { strength: number }) => {
                     <div
                         key={level}
                         className={`w-1 rounded-sm ${level <= bars
-                                ? 'bg-green-600'
-                                : 'bg-gray-300'
+                            ? 'bg-green-600'
+                            : 'bg-gray-300'
                             }`}
                         style={{ height: `${level * 3 + 2}px` }}
                     />

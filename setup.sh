@@ -42,6 +42,10 @@ setup_python_venv() {
     echo "Upgrading pip..."
     pip install --upgrade pip
     
+    # Upgrade setuptools and wheel
+    echo "Upgrading setuptools and wheel..."
+    pip install --upgrade setuptools wheel
+    
     # Install Python dependencies for all modules
     echo "Installing Python dependencies for all modules..."
     pip install -r "$PROJECT_ROOT/backend/requirements.txt"
@@ -260,6 +264,7 @@ main() {
     # Install all remaining system dependencies
     echo "Installing remaining system dependencies..."
     apt-get install -y --no-install-recommends \
+        build-essential \
         gir1.2-gtk-3.0 \
         bluetooth \
         bluez \

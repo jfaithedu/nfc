@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import axios from 'axios'; // Ensure axios is imported
+import { useEffect, useState } from 'react';
 import api from '../api/apiClient';
 
 export function useAuth() {
@@ -32,21 +33,29 @@ export function useAuth() {
       if (response.data.success) {
         const { token, expires_in } = response.data.data;
         const expiresAt = Date.now() + expires_in * 1000;
-        
+
         localStorage.setItem('token', token);
         localStorage.setItem('tokenExpiresAt', String(expiresAt));
-        
+
         setToken(token);
         setExpiresAt(expiresAt);
         setIsAuthenticated(true);
-        
+
         return true;
       } else {
         setError('Login failed');
         return false;
       }
-    } catch (err: any) {
-      setError(err.response?.data?.error?.message || 'Login failed');
+    } catch (err: unknown) {
+      let message = 'Login failed';
+      // Check if it's an Axios error with the expected structure
+      if (axios.isAxiosError(err) && err.response?.data?.error?.message) {
+        // Now safe to access err.response.data
+        message = err.response.data.error.message;
+      } else if (err instanceof Error) { // Fallback for generic errors
+        message = err.message;
+      }
+      setError(message);
       return false;
     } finally {
       setIsLoading(false);
