@@ -21,10 +21,12 @@ from backend.config import CONFIG
 from backend.utils.logger import get_logger
 
 # Import routes
-from .routes import tags, media, system, nfc_writer, auth
+from .routes import tags, media, system, nfc_writer
+from .routes import auth as auth_routes
 
 # Import middleware
-from .middleware import auth, error_handler
+from .middleware import auth as auth_middleware
+from .middleware import error_handler
 
 logger = get_logger(__name__)
 
@@ -58,13 +60,13 @@ def initialize():
     CORS(app, resources={r"/api/*": {"origins": "*"}})
 
     # Initialize authentication middleware
-    auth.init_auth(app, CONFIG)
+    auth_middleware.init_auth(app, CONFIG)
 
     # Initialize error handlers
     error_handler.init_error_handlers(app)
 
     # Register route blueprints
-    auth.register_routes(app)  # Register auth routes first
+    auth_routes.register_routes(app)  # Register auth routes first
     tags.register_routes(app)
     media.register_routes(app)
     system.register_routes(app)
