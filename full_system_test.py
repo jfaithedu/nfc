@@ -1268,18 +1268,40 @@ def test_database():
             print("Place the tag on the reader and press Enter...")
             input()
             
-            result = nfc_controller.poll_for_tag(read_ndef=False)
-            if not result:
-                print("❌ No tag detected")
+            print("Polling for tag (this may take a few seconds)...")
+            try:
+                # Make sure NFC controller is initialized
+                if not nfc_controller._initialized:
+                    print("Re-initializing NFC controller...")
+                    nfc_controller.initialize()
+                
+                # Poll with timeout and retries for better reliability
+                print(".", end="", flush=True)
+                result = nfc_controller.poll_for_tag(read_ndef=False)
+                print(".", end="", flush=True)
+                
+                if not result:
+                    # Try one more time with longer timeout
+                    print("Retrying tag detection...")
+                    time.sleep(1)  # Wait a moment
+                    result = nfc_controller.poll_for_tag(read_ndef=False)
+                
+                if not result:
+                    print("\n❌ No tag detected")
+                    continue
+                
+                # Handle both possible return types
+                if isinstance(result, tuple) and len(result) == 2:
+                    tag_uid, _ = result  # Unpack tuple
+                else:
+                    tag_uid = result  # Just the UID
+                
+                print(f"\n✅ Tag detected: {tag_uid}")
+            except Exception as e:
+                print(f"\n❌ Error detecting tag: {e}")
+                print("This could be due to hardware issues or disconnected NFC module.")
+                print("Try reinitializing the system from the main menu.")
                 continue
-            
-            # Handle both possible return types
-            if isinstance(result, tuple) and len(result) == 2:
-                tag_uid, _ = result  # Unpack tuple
-            else:
-                tag_uid = result  # Just the UID
-            
-            print(f"✅ Tag detected: {tag_uid}")
             
             # Check if tag already has an association
             current_media = db_manager.get_media_for_tag(tag_uid)
