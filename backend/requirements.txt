@@ -5,7 +5,7 @@ waitress==2.0.0  # Production WSGI server
 python-dotenv==0.19.0  # Environment variable management
 
 # NFC reading
-RPi.GPIO==0.7.0  # GPIO access
+# RPi.GPIO==0.7.0  # GPIO access - Install via apt instead
 smbus2==0.4.1  # I2C communication
 spidev==3.5  # SPI communication (if needed by NFC HAT)
 

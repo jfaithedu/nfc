@@ -236,6 +236,13 @@ verify_setup() {
         echo "❌ Python virtual environment does not exist"
     fi
     
+    # Verify RPi.GPIO is available
+    if source "$PROJECT_ROOT/venv/bin/activate" && python3 -c "import RPi.GPIO" 2>/dev/null; then
+        echo "✅ RPi.GPIO is properly installed"
+    else
+        echo "❌ RPi.GPIO is not properly installed"
+    fi
+    
     # Verify audio setup
     if systemctl is-active --quiet bluetooth && systemctl is-active --quiet bluealsa; then
         echo "✅ Bluetooth audio services are running"
@@ -310,6 +317,7 @@ main() {
         sox \
         python3-pip \
         python3-smbus \
+        python3-rpi.gpio \
         i2c-tools \
         python3-venv \
         python3-full \
