@@ -943,35 +943,55 @@ def stop_nfc_detection():
     """Stop NFC tag detection."""
     global nfc_detection_running, nfc_detection_thread, _nfc_exit_event, _last_detected_tag
     
-    # First signal the exit event to tell the continuous polling to stop
-    if '_nfc_exit_event' in globals() and _nfc_exit_event is not None:
-        _nfc_exit_event.set()
+    print("Stopping NFC tag detection...")
     
-    # Set the running flag to false
+    # Set the running flag to false first
     nfc_detection_running = False
+    
+    # Signal the exit event to tell the continuous polling to stop
+    try:
+        if _nfc_exit_event is not None:
+            _nfc_exit_event.set()
+            print("Sent exit signal to detection thread")
+    except Exception as e:
+        print(f"Error setting exit event: {e}")
     
     # If a tag was detected, clear it and stop any playback
     if _last_detected_tag is not None:
         print(f"Stopping any playback from tag {_last_detected_tag}")
         try:
             audio_controller.stop()
-        except:
-            pass
+        except Exception as e:
+            print(f"Error stopping audio: {e}")
         _last_detected_tag = None
     
     # Wait for the detection thread to terminate
-    if nfc_detection_thread and nfc_detection_thread.is_alive():
-        print("Waiting for NFC detection to stop...")
-        nfc_detection_thread.join(2.0)
-        if nfc_detection_thread.is_alive():
-            print("Warning: NFC detection thread is still running")
-        else:
-            print("NFC detection thread stopped")
+    try:
+        if nfc_detection_thread and nfc_detection_thread.is_alive():
+            print("Waiting for NFC detection thread to stop...")
+            nfc_detection_thread.join(3.0)  # Wait up to 3 seconds
+            
+            if nfc_detection_thread.is_alive():
+                print("Warning: NFC detection thread is still running after timeout")
+                # We'll clean up anyway and let the thread terminate on its own
+            else:
+                print("NFC detection thread stopped successfully")
+    except Exception as e:
+        print(f"Error stopping thread: {e}")
     
     # Clean up
     nfc_detection_thread = None
-    if '_nfc_exit_event' in globals():
-        _nfc_exit_event = None
+    _nfc_exit_event = None
+    
+    # Reinitialize NFC controller to ensure clean state
+    try:
+        nfc_controller.shutdown()
+        time.sleep(0.5)  # Brief delay before reinitializing
+        nfc_controller.initialize()
+    except Exception as e:
+        print(f"Error reinitializing NFC controller: {e}")
+    
+    print("NFC tag detection stopped")
 
 def test_media():
     """Test media functionality."""
