@@ -68,19 +68,41 @@ def download_youtube_audio(url, output_path=None):
         # Run the command
         process = subprocess.run(cmd, capture_output=True, text=True, check=True)
         
-        # Check if file exists
-        if os.path.exists(output_path):
-            print(f"✅ Successfully downloaded to {output_path}")
-            return output_path
-        else:
-            # Check for output ending in .mp3
-            if os.path.exists(output_path + ".mp3"):
-                print(f"✅ Successfully downloaded to {output_path}.mp3")
-                return output_path + ".mp3"
+        # Check if file exists with various possible extensions
+        possible_files = [
+            output_path,  # Original path
+            output_path + ".mp3",  # With mp3 extension
+            output_path + ".webm",  # With webm extension
+            output_path + ".m4a",   # With m4a extension
+            # Try removing extension if one was added and try with proper mp3
+            os.path.splitext(output_path)[0] + ".mp3"
+        ]
+        
+        for file_path in possible_files:
+            if os.path.exists(file_path):
+                print(f"✅ Successfully downloaded to {file_path}")
+                return file_path
+        
+        # List files in directory to see what was actually created
+        directory = os.path.dirname(output_path)
+        print(f"Looking for files in {directory}:")
+        if os.path.exists(directory):
+            files = os.listdir(directory)
+            # Get base name without path and extension
+            base_name = os.path.basename(os.path.splitext(output_path)[0])
+            for file in files:
+                # If our generated filename is part of a file in the directory
+                if base_name in file:
+                    # This might be our file with a different name
+                    full_path = os.path.join(directory, file)
+                    print(f"Found possible match: {full_path}")
+                    return full_path
             
-            print(f"❌ Download seemed to succeed but file not found at {output_path}")
-            print(f"Output: {process.stdout}")
-            return None
+            print(f"Files in directory: {files}")
+        
+        print(f"❌ Download seemed to succeed but file not found at {output_path}")
+        print(f"Output: {process.stdout}")
+        return None
     except subprocess.CalledProcessError as e:
         print(f"❌ Error downloading: {e}")
         print(f"Error output: {e.stderr}")
@@ -137,7 +159,7 @@ def main():
                 os.makedirs(download_dir, exist_ok=True)
                 
                 # Generate a filename
-                filename = f"youtube_audio_{uuid.uuid4()}.mp3"
+                filename = f"youtube_audio_{uuid.uuid4()}"  # Without extension
                 output_path = os.path.join(download_dir, filename)
                 
                 # Download the audio
@@ -145,6 +167,16 @@ def main():
                 if not audio_file:
                     print("Failed to download audio.")
                     continue
+                    
+                # Make sure we have the correct file to play
+                if not os.path.exists(audio_file):
+                    print(f"Warning: Expected file {audio_file} not found.")
+                    # Check common extensions
+                    for ext in ['.mp3', '.webm', '.m4a']:
+                        if os.path.exists(audio_file + ext):
+                            audio_file = audio_file + ext
+                            print(f"Found alternative file: {audio_file}")
+                            break
                 
                 # Play the audio
                 print(f"Playing {audio_file}...")
