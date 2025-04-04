@@ -596,28 +596,65 @@ def test_audio_output(device_address: str = None) -> bool:
         bool: True if test was successful
     """
     try:
-        test_file = "/usr/share/sounds/alsa/Front_Center.wav"
+        # Primary test file (system)
+        system_test_file = "/usr/share/sounds/alsa/Front_Center.wav"
         
-        # Use bluealsa-aplay if device address is provided and test file exists
-        if device_address and os.path.exists(test_file):
+        # Alternative test file (from project)
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_test_file = os.path.join(script_dir, "sample.mp3")
+        
+        # Check which test file exists and use it
+        if os.path.exists(system_test_file):
+            test_file = system_test_file
+        elif os.path.exists(project_test_file):
+            test_file = project_test_file
+        else:
+            logger.warning("No test audio file found")
+            return False
+        
+        # Use bluealsa-aplay if device address is provided
+        if device_address:
+            logger.info(f"Testing audio with bluealsa-aplay to device {device_address} using file {test_file}")
+            cmd = ["bluealsa-aplay", device_address, test_file]
+            logger.info(f"Running command: {' '.join(cmd)}")
+            
             result = subprocess.run(
-                ["bluealsa-aplay", device_address, test_file],
+                cmd,
                 capture_output=True,
                 text=True
             )
-            return result.returncode == 0
+            
+            if result.returncode != 0:
+                logger.error(f"bluealsa-aplay failed with exit code {result.returncode}")
+                logger.error(f"stderr: {result.stderr}")
+                logger.error(f"stdout: {result.stdout}")
+                return False
+            
+            logger.info("bluealsa-aplay command succeeded")
+            return True
         
-        # Otherwise use regular aplay
-        elif os.path.exists(test_file):
-            result = subprocess.run(
-                ["aplay", test_file],
-                capture_output=True,
-                text=True
-            )
-            return result.returncode == 0
-        
-        logger.warning("Test audio file not found")
-        return False
+        # Otherwise use regular aplay or play command
+        else:
+            if test_file.endswith('.wav'):
+                cmd = ["aplay", test_file]
+                logger.info(f"Testing audio with aplay to default device using file {test_file}")
+            else:
+                # For mp3 files, try using play from SoX
+                cmd = ["play", test_file]
+                logger.info(f"Testing audio with SoX play to default device using file {test_file}")
+            
+            logger.info(f"Running command: {' '.join(cmd)}")
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                logger.error(f"Audio playback command failed with exit code {result.returncode}")
+                logger.error(f"stderr: {result.stderr}")
+                logger.error(f"stdout: {result.stdout}")
+                return False
+            
+            logger.info("Audio playback command succeeded")
+            return True
     
     except Exception as e:
         logger.error(f"Audio test failed: {e}")
