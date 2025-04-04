@@ -514,20 +514,42 @@ class AudioController:
             logger.error(f"Failed to get discovered devices: {e}")
             return []
     
-    def connect_device(self, device_address: str) -> bool:
+    def pair_device(self, device_address: str) -> bool:
+        """
+        Pair with a Bluetooth device.
+        
+        This establishes a trusted relationship but doesn't connect.
+        To establish a connection after pairing, call connect_device().
+        
+        Args:
+            device_address (str): Bluetooth device address
+
+        Returns:
+            bool: True if paired successfully
+        """
+        self._ensure_initialized()
+        
+        try:
+            return self.bt_manager.pair_device(device_address)
+        except Exception as e:
+            logger.error(f"Failed to pair with {device_address}: {e}")
+            return False
+    
+    def connect_device(self, device_address: str, auto_pair: bool = True) -> bool:
         """
         Connect to a Bluetooth device.
         
         Args:
             device_address (str): Bluetooth device address
-        
+            auto_pair (bool): Whether to automatically pair if not paired
+
         Returns:
             bool: True if connected successfully
         """
         self._ensure_initialized()
         
         try:
-            result = self.bt_manager.connect_device(device_address)
+            result = self.bt_manager.connect_device(device_address, auto_pair)
             
             if result:
                 # Save as last device

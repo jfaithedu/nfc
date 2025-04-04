@@ -142,6 +142,37 @@ def register_routes(app):
             logger.error(f"Error getting Bluetooth devices: {e}")
             raise
 
+    @app.route('/api/system/bluetooth/pair', methods=['POST'])
+    @require_auth
+    def pair_bluetooth():
+        """Pair with a Bluetooth device without connecting."""
+        data = request.get_json()
+        
+        if not data:
+            raise InvalidRequestError("Missing request body")
+        
+        # Required fields
+        if 'address' not in data:
+            raise InvalidRequestError("Bluetooth device address is required")
+        
+        address = data['address']
+        
+        try:
+            success = bluetooth_manager.pair_device(address)
+            
+            if success:
+                return jsonify({
+                    'success': True,
+                    'data': {
+                        'message': f"Successfully paired with device {address}"
+                    }
+                })
+            else:
+                raise InvalidRequestError(f"Failed to pair with device {address}")
+        except Exception as e:
+            logger.error(f"Error pairing with Bluetooth device: {e}")
+            raise
+
     @app.route('/api/system/bluetooth/connect', methods=['POST'])
     @require_auth
     def connect_bluetooth():
@@ -157,8 +188,11 @@ def register_routes(app):
         
         address = data['address']
         
+        # Optional fields
+        auto_pair = data.get('auto_pair', True)
+        
         try:
-            success = bluetooth_manager.connect_device(address)
+            success = bluetooth_manager.connect_device(address, auto_pair)
             
             if success:
                 # Update the default Bluetooth device in config

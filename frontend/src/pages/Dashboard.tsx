@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { 
-  Card, 
-  CardHeader, 
-  CardTitle, 
-  CardDescription, 
-  CardContent 
-} from '../components/ui/card';
-import { Button } from '../components/ui/button';
 import api from '../api/apiClient';
+import { Button } from '../components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle
+} from '../components/ui/card';
 import { getUptime } from '../lib/utils';
 
 interface SystemStatus {
@@ -49,14 +49,14 @@ export default function Dashboard() {
     const fetchDashboardData = async () => {
       setIsLoading(true);
       setError(null);
-      
+
       try {
         // Get system status
         const systemRes = await api.system.getStatus();
         if (systemRes.data.success) {
           setSystemStatus(systemRes.data.data);
         }
-        
+
         // Get tag count
         const tagsRes = await api.tags.getAll();
         if (tagsRes.data.success) {
@@ -66,7 +66,7 @@ export default function Dashboard() {
             active: tags.filter((tag: any) => tag.media_id).length
           });
         }
-        
+
         // Get media stats
         const mediaRes = await api.media.getAll();
         const cacheRes = await api.media.getCacheStatus();
@@ -77,13 +77,13 @@ export default function Dashboard() {
             cache_size_mb: cacheRes.data.data.cache_size_mb
           });
         }
-        
+
         // Get last detected tag
         const lastTagRes = await api.tags.getLastDetected();
         if (lastTagRes.data.success && lastTagRes.data.data.last_detected) {
           setLastDetectedTag(lastTagRes.data.data.last_detected);
         }
-        
+
       } catch (err: any) {
         console.error(err);
         setError('Failed to load dashboard data');
@@ -91,12 +91,12 @@ export default function Dashboard() {
         setIsLoading(false);
       }
     };
-    
+
     fetchDashboardData();
-    
+
     // Poll for updates every 5 seconds
     const intervalId = setInterval(fetchDashboardData, 5000);
-    
+
     return () => clearInterval(intervalId);
   }, []);
 
@@ -127,7 +127,7 @@ export default function Dashboard() {
           Overview of your NFC music player system.
         </p>
       </div>
-      
+
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
@@ -139,7 +139,7 @@ export default function Dashboard() {
             </div>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">Volume</CardTitle>
@@ -150,7 +150,7 @@ export default function Dashboard() {
             </div>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">Tags</CardTitle>
@@ -162,7 +162,7 @@ export default function Dashboard() {
             <p className="text-xs text-muted-foreground">Active / Total</p>
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">Media Files</CardTitle>
@@ -177,7 +177,7 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
-      
+
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <Card className="md:col-span-2">
           <CardHeader>
@@ -189,48 +189,44 @@ export default function Dashboard() {
               <div className="grid gap-2">
                 <div className="flex items-center justify-between">
                   <span>NFC Reader</span>
-                  <span className={`px-2 py-1 rounded-full text-xs ${
-                    systemStatus.component_status.nfc 
-                      ? 'bg-green-100 text-green-800' 
+                  <span className={`px-2 py-1 rounded-full text-xs ${systemStatus.component_status.nfc
+                      ? 'bg-green-100 text-green-800'
                       : 'bg-red-100 text-red-800'
-                  }`}>
+                    }`}>
                     {systemStatus.component_status.nfc ? 'Online' : 'Offline'}
                   </span>
                 </div>
-                
+
                 <div className="flex items-center justify-between">
                   <span>API Server</span>
-                  <span className={`px-2 py-1 rounded-full text-xs ${
-                    systemStatus.component_status.api 
-                      ? 'bg-green-100 text-green-800' 
+                  <span className={`px-2 py-1 rounded-full text-xs ${systemStatus.component_status.api
+                      ? 'bg-green-100 text-green-800'
                       : 'bg-red-100 text-red-800'
-                  }`}>
+                    }`}>
                     {systemStatus.component_status.api ? 'Online' : 'Offline'}
                   </span>
                 </div>
-                
+
                 <div className="flex items-center justify-between">
                   <span>Bluetooth</span>
-                  <span className={`px-2 py-1 rounded-full text-xs ${
-                    systemStatus.component_status.bluetooth 
-                      ? 'bg-green-100 text-green-800' 
+                  <span className={`px-2 py-1 rounded-full text-xs ${systemStatus.component_status.bluetooth
+                      ? 'bg-green-100 text-green-800'
                       : 'bg-red-100 text-red-800'
-                  }`}>
+                    }`}>
                     {systemStatus.component_status.bluetooth ? 'Online' : 'Offline'}
                   </span>
                 </div>
-                
+
                 <div className="flex items-center justify-between">
                   <span>Media Service</span>
-                  <span className={`px-2 py-1 rounded-full text-xs ${
-                    systemStatus.component_status.media 
-                      ? 'bg-green-100 text-green-800' 
+                  <span className={`px-2 py-1 rounded-full text-xs ${systemStatus.component_status.media
+                      ? 'bg-green-100 text-green-800'
                       : 'bg-red-100 text-red-800'
-                  }`}>
+                    }`}>
                     {systemStatus.component_status.media ? 'Online' : 'Offline'}
                   </span>
                 </div>
-                
+
                 {systemStatus.current_bluetooth_device && (
                   <div className="mt-4 text-sm">
                     <p className="font-medium">Connected Bluetooth Speaker:</p>
@@ -242,7 +238,7 @@ export default function Dashboard() {
             )}
           </CardContent>
         </Card>
-        
+
         <Card>
           <CardHeader>
             <CardTitle>Last Detected Tag</CardTitle>
@@ -254,13 +250,13 @@ export default function Dashboard() {
                 <p><span className="font-medium">Name:</span> {lastDetectedTag.name || 'Unnamed'}</p>
                 <p><span className="font-medium">UID:</span> {lastDetectedTag.uid}</p>
                 <p><span className="font-medium">Last Used:</span> {
-                  lastDetectedTag.last_used 
-                    ? new Date(lastDetectedTag.last_used).toLocaleString() 
+                  lastDetectedTag.last_used
+                    ? new Date(lastDetectedTag.last_used).toLocaleString()
                     : 'Never'
                 }</p>
                 {lastDetectedTag.media_id && (
                   <p className="mt-2">
-                    <Link 
+                    <Link
                       to={`/media/${lastDetectedTag.media_id}`}
                       className="text-primary hover:underline"
                     >
@@ -275,7 +271,7 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
-      
+
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card className="col-span-full">
           <CardHeader>
@@ -291,8 +287,8 @@ export default function Dashboard() {
             <Link to="/system/bluetooth">
               <Button variant="outline" size="sm">Bluetooth Settings</Button>
             </Link>
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               size="sm"
               onClick={async () => {
                 try {

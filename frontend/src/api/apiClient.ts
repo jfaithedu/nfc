@@ -27,7 +27,7 @@ export const api = {
   auth: {
     login: (pin: string) => apiClient.post('/api/auth/login', { pin }),
   },
-  
+
   // Tags endpoints
   tags: {
     getAll: () => apiClient.get('/api/tags'),
@@ -35,20 +35,20 @@ export const api = {
     create: (data: any) => apiClient.post('/api/tags', data),
     update: (uid: string, data: any) => apiClient.put(`/api/tags/${uid}`, data),
     delete: (uid: string) => apiClient.delete(`/api/tags/${uid}`),
-    associate: (uid: string, mediaId: string) => 
+    associate: (uid: string, mediaId: string) =>
       apiClient.post(`/api/tags/${uid}/associate`, { media_id: mediaId }),
     getLastDetected: () => apiClient.get('/api/tags/last-detected'),
-    getHistory: (limit = 10, offset = 0) => 
+    getHistory: (limit = 10, offset = 0) =>
       apiClient.get(`/api/tags/history?limit=${limit}&offset=${offset}`),
   },
-  
+
   // Media endpoints
   media: {
-    getAll: (limit = 20, offset = 0) => 
+    getAll: (limit = 20, offset = 0) =>
       apiClient.get(`/api/media?limit=${limit}&offset=${offset}`),
     getById: (id: string) => apiClient.get(`/api/media/${id}`),
     addYouTube: (data: any) => apiClient.post('/api/media/youtube', data),
-    upload: (formData: FormData) => 
+    upload: (formData: FormData) =>
       apiClient.post('/api/media/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       }),
@@ -59,18 +59,20 @@ export const api = {
     getCacheStatus: () => apiClient.get('/api/media/cache/status'),
     cleanCache: (force = false) => apiClient.post('/api/media/cache/clean', { force }),
   },
-  
+
   // System endpoints
   system: {
     getStatus: () => apiClient.get('/api/system/status'),
     getBluetoothDevices: () => apiClient.get('/api/system/bluetooth/devices'),
-    connectBluetooth: (address: string) => 
-      apiClient.post('/api/system/bluetooth/connect', { address }),
+    pairBluetooth: (address: string) =>
+      apiClient.post('/api/system/bluetooth/pair', { address }),
+    connectBluetooth: (address: string, autoPair: boolean = true) =>
+      apiClient.post('/api/system/bluetooth/connect', { address, auto_pair: autoPair }),
     disconnectBluetooth: () => apiClient.post('/api/system/bluetooth/disconnect'),
     setVolume: (volume: number) => apiClient.post('/api/system/volume', { volume }),
     getSettings: () => apiClient.get('/api/system/settings'),
     updateSettings: (settings: any) => apiClient.put('/api/system/settings', settings),
-    changePin: (currentPin: string, newPin: string) => 
+    changePin: (currentPin: string, newPin: string) =>
       apiClient.post('/api/system/change_pin', { current_pin: currentPin, new_pin: newPin }),
     backup: () => apiClient.post('/api/system/backup', {}, { responseType: 'blob' }),
     restore: (backupFile: File, pin: string) => {
@@ -83,7 +85,7 @@ export const api = {
     },
     restart: (pin: string) => apiClient.post('/api/system/restart', { pin }),
   },
-  
+
   // NFC writer endpoints
   nfc: {
     startWriteMode: (data: any) => apiClient.post('/api/nfc/write/start', data),
@@ -94,7 +96,7 @@ export const api = {
     readNdef: () => apiClient.get('/api/nfc/ndef/read'),
     writeNdef: (data: any) => apiClient.post('/api/nfc/ndef/write', data),
   },
-  
+
   // Health check
   health: () => apiClient.get('/api/health'),
 };

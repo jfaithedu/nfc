@@ -1,17 +1,18 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import Layout from './Layout';
-import Login from '../pages/Login';
+import BluetoothSettings from '../pages/BluetoothSettings';
 import Dashboard from '../pages/Dashboard';
+import Login from '../pages/Login';
+import Layout from './Layout';
 
 // Protected route component
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated } = useAuth();
-  
+
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
-  
+
   return <Layout>{children}</Layout>;
 };
 
@@ -19,13 +20,13 @@ export default function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      
+
       <Route path="/" element={
         <ProtectedRoute>
           <Dashboard />
         </ProtectedRoute>
       } />
-      
+
       {/* Add placeholder routes for future implementation */}
       <Route path="/tags" element={
         <ProtectedRoute>
@@ -35,7 +36,7 @@ export default function AppRoutes() {
           </div>
         </ProtectedRoute>
       } />
-      
+
       <Route path="/media" element={
         <ProtectedRoute>
           <div className="p-6">
@@ -44,7 +45,7 @@ export default function AppRoutes() {
           </div>
         </ProtectedRoute>
       } />
-      
+
       <Route path="/system" element={
         <ProtectedRoute>
           <div className="p-6">
@@ -53,7 +54,13 @@ export default function AppRoutes() {
           </div>
         </ProtectedRoute>
       } />
-      
+
+      <Route path="/system/bluetooth" element={
+        <ProtectedRoute>
+          <BluetoothSettings />
+        </ProtectedRoute>
+      } />
+
       {/* Catch all route - redirect to dashboard */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

@@ -365,7 +365,11 @@ Response:
         "address": "00:11:22:33:44:55",
         "name": "JBL Flip 5",
         "paired": true,
-        "connected": false
+        "trusted": true,
+        "connected": false,
+        "icon": "audio-card",
+        "rssi": -58,
+        "audio_sink": true
       }
       // More devices...
     ],
@@ -378,10 +382,10 @@ Response:
 }
 ```
 
-#### Connect Bluetooth Device
+#### Pair with Bluetooth Device
 
 ```
-POST /api/system/bluetooth/connect
+POST /api/system/bluetooth/pair
 ```
 
 Request body:
@@ -391,6 +395,25 @@ Request body:
   "address": "00:11:22:33:44:55"
 }
 ```
+
+This endpoint establishes a pairing relationship (trusted connection) with a Bluetooth device without actually connecting to it.
+
+#### Connect to Paired Bluetooth Device
+
+```
+POST /api/system/bluetooth/connect
+```
+
+Request body:
+
+```json
+{
+  "address": "00:11:22:33:44:55",
+  "auto_pair": true // Optional, default is true. If true, will attempt to pair if not already paired
+}
+```
+
+This endpoint connects to a previously paired Bluetooth device or attempts to pair and connect if auto_pair is true.
 
 #### Disconnect Bluetooth Device
 
@@ -672,6 +695,110 @@ await associateTagWithMedia(detectedTag.uid, media.id);
 alert("Tag successfully associated with media!");
 ```
 
+### Bluetooth Pairing and Connection Flow
+
+The system now uses BlueALSA for Bluetooth audio management, which provides better stability and compatibility with most Bluetooth speakers. The API clearly separates the **pairing** process (establishing a trusted relationship with a device) and the **connection** process (actively connecting to use the device).
+
+Here's an example of how to discover, pair with, and connect to a Bluetooth device:
+
+```javascript
+// 1. Discover available Bluetooth devices
+const discoverDevices = async () => {
+  const response = await fetch("/api/system/bluetooth/devices", {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  const result = await response.json();
+  if (!result.success) {
+    throw new Error(result.error.message);
+  }
+
+  // Filter for devices that support audio (A2DP sink)
+  const audioDevices = result.data.devices.filter(
+    (device) => device.audio_sink
+  );
+  return audioDevices;
+};
+
+// 2. Pair with a Bluetooth device
+const pairDevice = async (address) => {
+  const response = await fetch("/api/system/bluetooth/pair", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      address,
+    }),
+  });
+
+  const result = await response.json();
+  if (!result.success) {
+    throw new Error(result.error.message);
+  }
+
+  return result.data;
+};
+
+// 3. Connect to a paired device
+const connectToDevice = async (address) => {
+  const response = await fetch("/api/system/bluetooth/connect", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      address,
+      auto_pair: false, // We already paired explicitly
+    }),
+  });
+
+  const result = await response.json();
+  if (!result.success) {
+    throw new Error(result.error.message);
+  }
+
+  return result.data;
+};
+
+// Example usage in a React component
+const connectBluetoothSpeaker = async () => {
+  try {
+    // First discover devices
+    setStatus("Discovering devices...");
+    const devices = await discoverDevices();
+
+    // Let user select a device (simplified example - would use UI components in real app)
+    setStatus("Select a device to pair with");
+    const selectedDevice = devices[0]; // In a real app, user would select from a list
+
+    // Pair with the device
+    setStatus(`Pairing with ${selectedDevice.name}...`);
+    await pairDevice(selectedDevice.address);
+
+    // Connect to the device
+    setStatus(`Connecting to ${selectedDevice.name}...`);
+    const result = await connectToDevice(selectedDevice.address);
+
+    setStatus(`Connected to ${result.device.name}`);
+  } catch (error) {
+    setStatus(`Error: ${error.message}`);
+  }
+};
+```
+
+This separation of pairing and connecting gives you more control over the Bluetooth connection process and allows for more robust error handling. You can also build a UI that clearly distinguishes between:
+
+1. **Available devices** - Devices that are in range but not paired
+2. **Paired devices** - Devices that have an established trusted relationship but are not currently connected
+3. **Connected device** - The currently active Bluetooth audio device
+
+Note that the device objects now include additional properties such as `audio_sink` (indicates A2DP sink support), `trusted`, `icon`, and `rssi` (signal strength) which you can use to enhance your UI.
+
 ### Writing NDEF Data to a Tag
 
 ```javascript
@@ -712,6 +839,31 @@ try {
 - [Axios](https://axios-http.com/) for HTTP requests (optional, fetch also works well)
 - [React Hook Form](https://react-hook-form.com/) for form handling
 - [Zod](https://zod.dev/) for request/response validation
+
+## BlueALSA Implementation Notes
+
+The system now uses BlueALSA for Bluetooth audio management instead of the previously used bluez-alsa compiled from source. This change brings several improvements:
+
+- **Simplified Installation**: Uses standard Raspberry Pi OS packages
+- **Better Stability**: Direct ALSA to BlueALSA routing
+- **Improved Compatibility**: Works with a wider range of Bluetooth speakers
+
+### Important: Separation of Pairing and Connecting
+
+The most critical change in the new Bluetooth system is the clear separation between:
+
+1. **Pairing** (`/api/system/bluetooth/pair`): Establishes a trusted relationship with a device without connecting to it. This is a one-time operation that makes the device "known" to the system.
+
+2. **Connecting** (`/api/system/bluetooth/connect`): Establishes an active connection to an already paired device. This is what you do each time you want to use the device.
+
+This separation gives you:
+
+- More precise control over the Bluetooth lifecycle
+- Better error handling (you can detect exactly where an issue occurs)
+- Improved UI possibilities (showing different states for paired vs. connected devices)
+- More reliable connections, especially for audio devices
+
+Your frontend should reflect this separation clearly in both the UI design and the implementation logic. For devices that require a PIN, the pairing process will handle this authentication, while the connection process focuses only on establishing the A2DP audio profile.
 
 ## Testing the API
 
