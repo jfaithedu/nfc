@@ -362,10 +362,16 @@ def test_nfc():
             try:
                 while time.time() - start_time < 10:
                     # Just get the UID first, like in test_nfc.py
-                    uid = nfc_controller.poll_for_tag(read_ndef=False)
+                    result = nfc_controller.poll_for_tag(read_ndef=False)
                     
-                    if uid:
+                    if result:
                         detected = True
+                        
+                        # Handle the return value which could be just a UID or a tuple
+                        uid = result
+                        if isinstance(result, tuple) and len(result) == 2:
+                            uid, _ = result
+                            
                         print(f"\n✅ Tag detected! UID: {uid}")
                         
                         # Check if tag has media association
@@ -557,10 +563,15 @@ def test_nfc():
             uid = None
             try:
                 # Poll for tag first to ensure it's present (without reading NDEF yet)
-                uid = nfc_controller.poll_for_tag(read_ndef=False)
-                if not uid:
+                result = nfc_controller.poll_for_tag(read_ndef=False)
+                if not result:
                     print("❌ No tag detected. Please make sure the tag is on the reader.")
                     continue
+                
+                # Handle the return value which could be just a UID or a tuple
+                uid = result
+                if isinstance(result, tuple) and len(result) == 2:
+                    uid, _ = result
                 
                 print(f"✅ Tag detected: {uid}")
                 
@@ -654,6 +665,13 @@ def tag_callback(uid, ndef_info=None):
     Callback function for tag detection.
     Handles both callback signatures (with and without NDEF info).
     """
+    # Handle tuple return value from poll_for_tag when read_ndef=True
+    if isinstance(uid, tuple) and len(uid) == 2:
+        uid_str, ndef_data = uid
+        if ndef_info is None:
+            ndef_info = ndef_data
+        uid = uid_str
+    
     print(f"\n✅ Tag detected: {uid}")
     
     # Check if tag has media association
@@ -789,6 +807,13 @@ def nfc_detection_worker():
             # Only process if still running
             if nfc_detection_running:
                 try:
+                    # Handle tuple return value from poll_for_tag when read_ndef=True
+                    if isinstance(uid, tuple) and len(uid) == 2:
+                        uid_str, ndef_data = uid
+                        if ndef_info is None:
+                            ndef_info = ndef_data
+                        uid = uid_str
+                    
                     # Check if this is a new tag or tag removal
                     if uid is None or uid == "":
                         # No tag detected, which could mean a tag was removed
