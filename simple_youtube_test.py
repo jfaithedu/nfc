@@ -47,19 +47,18 @@ def download_youtube_audio(url, output_path=None):
         output_path = os.path.join(temp_dir, "audio.mp3")
     
     print(f"Downloading from {url} to {output_path}...")
+    print("This may take some time on Raspberry Pi. Please be patient...")
+    print("Step 1/3: Fetching video information...")
     
     # Prepare yt-dlp command
     cmd = [
         "yt-dlp",
-        "-f", "bestaudio[filesize<20M]/bestaudio",  # Smaller audio files preferred
-        "--extract-audio",  # Extract audio
+        "-f", "ba[ext=m4a]",  # Select m4a format which is usually faster to process
         "--audio-format", "mp3",  # Convert to mp3
         "--audio-quality", "128K",  # Lower quality for faster conversion
         "--no-cache-dir",  # Don't use cache
         "--no-cookies",  # Don't use cookies
-        "--no-check-certificates",  # Skip certificate validation
-        "--concurrent-fragments", "4",  # Download with multiple connections
-        "--throttled-rate", "100K",  # Limit bandwidth usage to avoid stalling
+        # Limit processed formats for speed
         "-o", output_path,  # Output file
         url  # YouTube URL
     ]
