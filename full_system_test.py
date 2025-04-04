@@ -318,54 +318,80 @@ def test_nfc():
             start_time = time.time()
             detected = False
             
-            while time.time() - start_time < 10:
-                # Just get the UID first, like in test_nfc.py
-                uid = nfc_controller.poll_for_tag(read_ndef=False)
-                if uid:
-                    detected = True
-                    print(f"\n✅ Tag detected! UID: {uid}")
+            try:
+                while time.time() - start_time < 10:
+                    # Just get the UID first, like in test_nfc.py
+                    uid = nfc_controller.poll_for_tag(read_ndef=False)
                     
-                    # Check if tag has media association
-                    media_info = db_manager.get_media_for_tag(uid)
-                    if media_info:
-                        print(f"  Tag is associated with media: {media_info.get('title')}")
-                    else:
-                        print("  Tag is not associated with any media")
-                    
-                    # Now try to read NDEF data separately
-                    try:
-                        ndef_data = nfc_controller.read_ndef_data()
-                        if ndef_data:
-                            print("\nNDEF data found:")
-                            print(f"  Type: {ndef_data.get('type', 'Unknown')}")
-                            
-                            if 'records' in ndef_data:
-                                for i, record in enumerate(ndef_data['records']):
-                                    print(f"\n  Record {i+1}:")
-                                    if 'decoded' in record:
-                                        record_type = record['decoded'].get('type')
+                    if uid:
+                        detected = True
+                        print(f"\n✅ Tag detected! UID: {uid}")
+                        
+                        # Check if tag has media association
+                        media_info = db_manager.get_media_for_tag(uid)
+                        if media_info:
+                            print(f"  Tag is associated with media: {media_info.get('title')}")
+                        else:
+                            print("  Tag is not associated with any media")
+                        
+                        # Now try to read NDEF data separately with proper error handling
+                        try:
+                            ndef_data = nfc_controller.read_ndef_data()
+                            if ndef_data:
+                                print("\nNDEF data found:")
+                                print(f"  Type: {ndef_data.get('type', 'Unknown')}")
+                                
+                                if 'records' in ndef_data:
+                                    for i, record in enumerate(ndef_data['records']):
+                                        print(f"\n  Record {i+1}:")
+                                        
+                                        # Show TNF and type info
+                                        tnf = record.get('type_name_format', record.get('tnf', 'Unknown'))
+                                        record_type = record.get('type', 'Unknown')
+                                        print(f"    TNF: {tnf}")
                                         print(f"    Type: {record_type}")
                                         
-                                        if record_type == 'uri':
-                                            uri = record['decoded'].get('uri')
-                                            print(f"    URI: {uri}")
-                                        elif record_type == 'text':
-                                            text = record['decoded'].get('text')
-                                            print(f"    Text: {text}")
-                                    else:
-                                        print(f"    Raw: {record}")
-                        else:
-                            print("\nNo NDEF data found on tag")
-                    except Exception as e:
-                        print(f"\nCould not read NDEF data: {e}")
+                                        # Show decoded info if available
+                                        if 'decoded' in record:
+                                            decoded_type = record['decoded'].get('type')
+                                            print(f"    Decoded Type: {decoded_type}")
+                                            
+                                            if decoded_type == 'uri':
+                                                uri = record['decoded'].get('uri')
+                                                print(f"    URI: {uri}")
+                                            elif decoded_type == 'text':
+                                                text = record['decoded'].get('text')
+                                                print(f"    Text: {text}")
+                                            else:
+                                                print(f"    Decoded Data: {record['decoded']}")
+                                        # Show raw payload if no decoded info
+                                        elif 'payload' in record:
+                                            payload = record.get('payload')
+                                            if isinstance(payload, bytes):
+                                                try:
+                                                    payload_str = payload.decode('utf-8')
+                                                    print(f"    Payload (text): {payload_str}")
+                                                except UnicodeDecodeError:
+                                                    print(f"    Payload (hex): {payload.hex()}")
+                                            else:
+                                                print(f"    Payload: {payload}")
+                                        else:
+                                            print(f"    Raw: {record}")
+                            else:
+                                print("\nNo NDEF data found on tag")
+                        except Exception as e:
+                            print(f"\nCould not read NDEF data: {e}")
+                        
+                        break
                     
-                    break
+                    # Visual feedback during polling
+                    print(".", end="", flush=True)
+                    time.sleep(0.1)
                 
-                print(".", end="", flush=True)
-                time.sleep(0.1)
-            
-            if not detected:
-                print("\n❌ No tag detected within 10 seconds")
+                if not detected:
+                    print("\n❌ No tag detected within 10 seconds")
+            except Exception as e:
+                print(f"\n❌ Error during tag detection: {e}")
             
         elif choice == '3':
             # Start continuous tag detection
@@ -420,44 +446,90 @@ def test_nfc():
             print("Place tag on reader and press Enter to read...")
             input()
             
+            # First make sure we have the tag
+            uid = None
             try:
-                # Try to read NDEF data
+                # Poll for tag first to ensure it's present (without reading NDEF yet)
+                uid = nfc_controller.poll_for_tag(read_ndef=False)
+                if not uid:
+                    print("❌ No tag detected. Please make sure the tag is on the reader.")
+                    continue
+                
+                print(f"✅ Tag detected: {uid}")
+                
+                # Now try to read NDEF data
                 ndef_data = nfc_controller.read_ndef_data()
                 
                 if ndef_data:
                     print("✅ NDEF data found:")
-                    print(f"  Message type: {ndef_data.get('type')}")
+                    print(f"  Message type: {ndef_data.get('type', 'Unknown')}")
                     
+                    # Show top-level URI or text if available
                     if ndef_data.get('type') == 'uri':
                         print(f"  URI: {ndef_data.get('uri')}")
                     elif ndef_data.get('type') == 'text':
                         print(f"  Text: {ndef_data.get('text')}")
                     
+                    # Process all records
                     records = ndef_data.get('records', [])
                     print(f"\n  Number of records: {len(records)}")
                     
                     for i, record in enumerate(records, 1):
                         print(f"\n  Record {i}:")
-                        print(f"    Type: {record.get('type')}")
-                        print(f"    TNF: {record.get('tnf')}")
+                        
+                        # Show TNF and type info
+                        tnf = record.get('type_name_format', record.get('tnf', 'Unknown'))
+                        record_type = record.get('type', 'Unknown')
+                        print(f"    TNF: {tnf}")
+                        print(f"    Type: {record_type}")
+                        
+                        # Show decoded info if available
+                        if 'decoded' in record:
+                            decoded_type = record['decoded'].get('type')
+                            print(f"    Decoded Type: {decoded_type}")
+                            
+                            if decoded_type == 'uri':
+                                uri = record['decoded'].get('uri')
+                                print(f"    URI: {uri}")
+                            elif decoded_type == 'text':
+                                text = record['decoded'].get('text')
+                                language = record['decoded'].get('language', 'en')
+                                print(f"    Text: {text}")
+                                print(f"    Language: {language}")
+                            else:
+                                print(f"    Decoded Data: {record['decoded']}")
+                                
+                        # Show raw payload if available
                         if 'payload' in record:
-                            # Try to show payload in a readable format
                             try:
                                 payload = record.get('payload')
                                 if isinstance(payload, bytes):
                                     try:
-                                        payload_str = payload.decode('utf-8')
-                                        print(f"    Payload: {payload_str}")
+                                        payload_str = payload.decode('utf-8', errors='replace')
+                                        print(f"    Payload (text): {payload_str}")
                                     except:
                                         print(f"    Payload (hex): {payload.hex()}")
                                 else:
                                     print(f"    Payload: {payload}")
-                            except:
-                                print("    Payload: [Cannot display]")
+                            except Exception as payload_e:
+                                print(f"    Payload: [Cannot display: {payload_e}]")
                 else:
                     print("❌ No NDEF data found on tag")
+                    
+                    # For debugging, try to read raw data from block 4
+                    try:
+                        print("\nReading raw data from block 4 for debugging:")
+                        raw_data = nfc_controller.read_tag_data(4)
+                        print(f"  Block 4 (hex): {raw_data.hex()}")
+                        print(f"  Block 4 (ASCII): {raw_data.decode('ascii', errors='replace')}")
+                    except Exception as raw_e:
+                        print(f"  Could not read raw data: {raw_e}")
+                    
             except Exception as e:
-                print(f"❌ Error reading tag: {e}")
+                if uid:
+                    print(f"❌ Error reading NDEF data: {e}")
+                else:
+                    print(f"❌ Error detecting tag: {e}")
             
         elif choice == '7':
             # Back to main menu
@@ -647,8 +719,14 @@ def test_media():
                             input()
                             
                             # Try to read the tag
-                            tag_uid, _ = nfc_controller.poll_for_tag()
-                            if tag_uid:
+                            result = nfc_controller.poll_for_tag(read_ndef=True)
+                            if result:
+                                # Handle both possible return types
+                                if isinstance(result, tuple) and len(result) == 2:
+                                    tag_uid, _ = result  # Unpack tuple
+                                else:
+                                    tag_uid = result  # Just the UID
+                                
                                 # Associate tag with media
                                 if db_manager.associate_tag_with_media(tag_uid, media_id):
                                     print(f"✅ Tag {tag_uid} associated with media {media_id}")
