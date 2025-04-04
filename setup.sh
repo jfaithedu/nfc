@@ -23,48 +23,61 @@ check_root() {
 # Function to create virtual environment and install dependencies
 setup_python_venv() {
     echo -e "\n[1/5] Setting up Python virtual environment..."
-    
-    # Remove existing venv if present
-    if [ -d "$PROJECT_ROOT/venv" ]; then
-        echo "Removing existing virtual environment..."
-        rm -rf "$PROJECT_ROOT/venv"
+
+    VENV_DIR="$PROJECT_ROOT/venv"
+
+    if [ -d "$VENV_DIR" ] && [ -f "$VENV_DIR/bin/activate" ]; then
+        echo "Found existing virtual environment at $VENV_DIR."
+    else
+        echo "No valid virtual environment found. Creating new one..."
+        # Remove potentially incomplete venv if activation script is missing
+        if [ -d "$VENV_DIR" ]; then
+            echo "Removing incomplete venv directory..."
+            rm -rf "$VENV_DIR"
+        fi
+        # Create virtual environment with system packages
+        echo "Creating new virtual environment with system packages..."
+        python3 -m venv "$VENV_DIR" --system-site-packages
+
+        # Set ownership early if creating venv as root
+        if [ -n "$SUDO_USER" ]; then
+            chown -R $SUDO_USER:$SUDO_USER "$VENV_DIR"
+        fi
     fi
-    
-    # Create virtual environment with system packages
-    echo "Creating new virtual environment with system packages..."
-    python3 -m venv "$PROJECT_ROOT/venv" --system-site-packages
-    
+
     # Activate virtual environment
     echo "Activating virtual environment..."
-    source "$PROJECT_ROOT/venv/bin/activate"
-    
+    source "$VENV_DIR/bin/activate"
+
     # Upgrade pip
     echo "Upgrading pip..."
     pip install --upgrade pip
-    
+
     # Upgrade setuptools and wheel
     echo "Upgrading setuptools and wheel..."
     pip install --upgrade setuptools wheel
-    
+
     # Install Python dependencies for all modules
     echo "Installing Python dependencies for all modules..."
     pip install -r "$PROJECT_ROOT/backend/requirements.txt"
     pip install -r "$PROJECT_ROOT/backend/modules/audio/requirements.txt"
     pip install -r "$PROJECT_ROOT/backend/modules/nfc/requirements.txt"
-    
-    # Make test scripts executable
+
+    # Ensure test scripts are executable (idempotent)
     chmod +x "$PROJECT_ROOT/backend/modules/audio/interactive_test.py"
     chmod +x "$PROJECT_ROOT/backend/modules/audio/test_imports.py"
     chmod +x "$PROJECT_ROOT/backend/modules/nfc/test_nfc.py"
-    
+
+    # Ensure script ownership is correct (important if venv existed but script ownership was wrong)
     if [ -n "$SUDO_USER" ]; then
-        chown -R $SUDO_USER:$SUDO_USER "$PROJECT_ROOT/venv"
         chown $SUDO_USER:$SUDO_USER "$PROJECT_ROOT/backend/modules/audio/interactive_test.py"
         chown $SUDO_USER:$SUDO_USER "$PROJECT_ROOT/backend/modules/audio/test_imports.py"
         chown $SUDO_USER:$SUDO_USER "$PROJECT_ROOT/backend/modules/nfc/test_nfc.py"
+        # Re-apply ownership to venv just in case pip created root-owned files inside
+        chown -R $SUDO_USER:$SUDO_USER "$VENV_DIR"
     fi
-    
-    echo "Python virtual environment set up successfully"
+
+    echo "Python virtual environment setup/update completed"
 }
 
 # Function to configure audio system
