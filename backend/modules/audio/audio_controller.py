@@ -14,7 +14,7 @@ import json
 from typing import Dict, Optional, List, Any, Tuple
 
 from .bluetooth_manager import BluetoothManager, get_bluetooth_status
-from .playback_handler import AudioPlayer, test_audio_output as test_audio_output_func
+from .playback_handler import AudioPlayer, test_audio_output
 from .system_sounds import initialize_system_sounds, play_sound
 from .exceptions import (
     AudioError, 
@@ -701,9 +701,9 @@ class AudioController:
         # Get connected device
         device = self.bt_manager.get_connected_device()
         if device:
-            return test_audio_output_func(device.get("address"))
+            return test_audio_output(device.get("address"))
         else:
-            return test_audio_output_func()
+            return test_audio_output()
     
     def _ensure_initialized(self) -> None:
         """
