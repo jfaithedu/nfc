@@ -784,17 +784,51 @@ def nfc_detection_worker():
     try:
         # Set up tag detection callback
         def tag_callback_wrapper(uid, ndef_info=None):
+            global _last_detected_tag
+            
             # Only process if still running
             if nfc_detection_running:
                 try:
-                    # Call our tag callback
-                    tag_callback(uid, ndef_info)
-                    
-                    # Sleep briefly to avoid immediate re-detection of the same tag
-                    # and to give user time to process the result
-                    print("\nWaiting for 2 seconds before detecting next tag...")
-                    time.sleep(2)
-                    print("Ready for next tag")
+                    # Check if this is a new tag or tag removal
+                    if uid is None or uid == "":
+                        # No tag detected, which could mean a tag was removed
+                        if _last_detected_tag:
+                            print(f"\n🔄 Tag {_last_detected_tag} removed")
+                            
+                            # Stop any ongoing playback when tag is removed
+                            try:
+                                print("Stopping audio playback...")
+                                audio_controller.stop()
+                            except Exception as audio_e:
+                                print(f"Error stopping audio: {audio_e}")
+                            
+                            # Reset last detected tag
+                            _last_detected_tag = None
+                    else:
+                        # Check if this is the same tag as before
+                        if uid != _last_detected_tag:
+                            # It's a new tag or a different tag
+                            # Stop any existing playback before handling new tag
+                            if _last_detected_tag:
+                                try:
+                                    audio_controller.stop()
+                                except:
+                                    pass
+                            
+                            # Call our tag callback for the new tag
+                            tag_callback(uid, ndef_info)
+                            
+                            # Update last detected tag
+                            _last_detected_tag = uid
+                            
+                            # Sleep briefly to avoid immediate re-detection of the same tag
+                            # and to give user time to process the result
+                            print("\nWaiting for 2 seconds before detecting next tag...")
+                            time.sleep(2)
+                            print("Ready for next tag")
+                        else:
+                            # Same tag detected again, no need to process
+                            pass
                 except Exception as e:
                     print(f"❌ Error in tag callback: {e}")
             
