@@ -1197,7 +1197,8 @@ def get_bluetooth_status() -> Dict:
     
     if not _controller:
         # Return basic status
-        return get_bluetooth_status()
+        from .bluetooth_manager import get_bluetooth_status as get_basic_status
+        return get_basic_status()
     
     return _controller.get_bluetooth_status()
 
@@ -1215,5 +1216,5 @@ def test_audio_output() -> bool:
         if not initialize():
             logger.warning("Cannot test audio: audio module not initialized")
             return False
-    
+        
     return _controller.test_audio_output()

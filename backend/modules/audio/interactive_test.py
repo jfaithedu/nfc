@@ -22,8 +22,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(script_dir, '../../../')))
 
 # Import from audio module
 from backend.modules.audio.audio_controller import AudioController
-from backend.modules.audio.bluetooth_manager import get_bluetooth_status
-from backend.modules.audio.playback_handler import test_audio_output
 
 # Create a global controller
 audio_controller = None
