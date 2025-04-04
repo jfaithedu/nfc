@@ -35,9 +35,9 @@ setup_python_venv() {
             echo "Removing incomplete venv directory..."
             rm -rf "$VENV_DIR"
         fi
-        # Create virtual environment without system packages for better isolation
-        echo "Creating new virtual environment (isolated)..."
-        python3 -m venv "$VENV_DIR"
+        # Create virtual environment WITH system packages to use system's python3-gi
+        echo "Creating new virtual environment (with system packages)..."
+        python3 -m venv "$VENV_DIR" --system-site-packages
 
         # Set ownership early if creating venv as root
         if [ -n "$SUDO_USER" ]; then
@@ -274,7 +274,8 @@ main() {
         python3-cairo \
         python3-gi \
         python3-cairo-dev \
-        libcairo-gobject2
+        libcairo-gobject2 \
+        ffmpeg
 
     # Run ldconfig to ensure library cache is updated
     ldconfig
