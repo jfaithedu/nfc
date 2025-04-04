@@ -313,6 +313,35 @@ def remove_tag_association(tag_uid):
         logger.error(f"Error removing tag association for {tag_uid}: {str(e)}")
         raise DatabaseQueryError(f"Failed to remove tag association: {str(e)}")
 
+def get_tags_for_media(media_id):
+    """
+    Get all tags associated with a specific media.
+
+    Args:
+        media_id (str): The ID of the media
+
+    Returns:
+        list: List of dictionaries with tag information
+    """
+    try:
+        with DatabaseConnection(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM tags 
+                WHERE media_id = ?
+                ORDER BY last_used DESC
+            """, (media_id,))
+            
+            result = []
+            for row in cursor.fetchall():
+                tag_dict = dict(row)
+                result.append(tag_dict)
+                
+            return result
+    except Exception as e:
+        logger.error(f"Error retrieving tags for media {media_id}: {str(e)}")
+        raise DatabaseQueryError(f"Failed to get tags for media: {str(e)}")
+
 def get_all_tags():
     """
     Get all registered tags and their associations.
