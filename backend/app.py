@@ -59,6 +59,9 @@ def main_loop():
     logger.info("Entering main application loop")
     
     try:
+        # Track previous tag to detect tag removal
+        previous_tag_uid = None
+        
         while True:
             # Poll for NFC tag
             poll_result = nfc_controller.poll_for_tag()
@@ -76,8 +79,15 @@ def main_loop():
                     # Handle case where only UID is returned (not a tuple)
                     tag_uid = poll_result
             
-            if tag_uid:
-                logger.info(f"Tag detected: {tag_uid}")
+            # Tag removal detection
+            if previous_tag_uid and not tag_uid:
+                logger.info("Tag removed, stopping playback")
+                audio_controller.stop()
+                previous_tag_uid = None
+            
+            # Tag placement detection (new tag or different tag)
+            elif tag_uid and tag_uid != previous_tag_uid:
+                logger.info(f"New tag detected: {tag_uid}")
                 
                 # NDEF Handling - Check if ndef_info contains a valid URI
                 if ndef_info and ndef_info.get('type') == 'uri':
@@ -108,6 +118,9 @@ def main_loop():
                             # Prepare and play the media
                             media_path = media_manager.prepare_media(media_info)
                             audio_controller.play(media_path)
+                            
+                            # Save current tag UID
+                            previous_tag_uid = tag_uid
                     except Exception as e:
                         logger.error(f"Error during media playback: {e}")
                         audio_controller.play_error_sound()
