@@ -35,9 +35,9 @@ setup_python_venv() {
             echo "Removing incomplete venv directory..."
             rm -rf "$VENV_DIR"
         fi
-        # Create virtual environment with system packages
-        echo "Creating new virtual environment with system packages..."
-        python3 -m venv "$VENV_DIR" --system-site-packages
+        # Create virtual environment without system packages for better isolation
+        echo "Creating new virtual environment (isolated)..."
+        python3 -m venv "$VENV_DIR"
 
         # Set ownership early if creating venv as root
         if [ -n "$SUDO_USER" ]; then
@@ -48,6 +48,10 @@ setup_python_venv() {
     # Activate virtual environment
     echo "Activating virtual environment..."
     source "$VENV_DIR/bin/activate"
+
+    # Clear pip cache
+    echo "Clearing pip cache..."
+    pip cache purge
 
     # Upgrade pip
     echo "Upgrading pip..."
@@ -266,6 +270,7 @@ main() {
         pkg-config \
         python3-dev \
         libgirepository1.0-dev \
+        gobject-introspection \
         python3-cairo \
         python3-gi \
         python3-cairo-dev \
