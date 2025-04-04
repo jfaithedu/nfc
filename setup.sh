@@ -8,6 +8,7 @@ set -e  # Exit on error
 # Default start step
 start_step=1
 total_steps=5
+skip_prereqs=false
 
 # --- Argument Parsing ---
 while [[ "$#" -gt 0 ]]; do
@@ -21,6 +22,10 @@ while [[ "$#" -gt 0 ]]; do
                 echo "Error: --start-step requires a valid number between 1 and $total_steps." >&2
                 exit 1
             fi
+            ;;
+        --skip-prereqs)
+            skip_prereqs=true
+            echo "Skipping prerequisite system package installation."
             ;;
         *) echo "Unknown parameter passed: $1"; exit 1 ;;
     esac
@@ -233,7 +238,8 @@ setup_frontend() {
     cd "$PROJECT_ROOT/frontend"
     
     echo "Installing frontend dependencies..."
-    npm install
+    # Use memory-optimized npm install to prevent Pi from crashing
+    NODE_OPTIONS="--max_old_space_size=256" npm install --no-save --no-audit --no-fund --prefer-offline --production=false
     
     # Return to project root
     cd "$PROJECT_ROOT"
@@ -299,17 +305,18 @@ main() {
     echo "Starting comprehensive project setup..."
     local current_step=0 # Use 0 for pre-requisite steps
 
-    # --- Pre-requisite System Dependencies (Always Run) ---
-    echo -e "\n[Pre-requisites] Ensuring core system packages are installed..."
-    # Update package lists first
-    echo "Updating package lists..."
-    apt-get update
-    
-    # Install Cairo and core dependencies first to fix pip build issues
-    echo "Installing Cairo and core dependencies first..."
-    apt-get install -y --no-install-recommends \
-        libcairo2-dev \
-        pkg-config \
+    # --- Pre-requisite System Dependencies (Conditionally Run) ---
+    if [ "$skip_prereqs" = false ]; then
+        echo -e "\n[Pre-requisites] Ensuring core system packages are installed..."
+        # Update package lists first
+        echo "Updating package lists..."
+        apt-get update
+
+        # Install Cairo and core dependencies first to fix pip build issues
+        echo "Installing Cairo and core dependencies first..."
+        apt-get install -y --no-install-recommends \
+            libcairo2-dev \
+            pkg-config \
         python3-dev \
         libgirepository1.0-dev \
         gobject-introspection \
@@ -351,8 +358,11 @@ main() {
         python3-venv \
         python3-full \
         libgpiod2 \
-        nodejs \
-        npm
+            nodejs \
+            npm
+    else
+         echo -e "\nSkipping [Pre-requisites] system package installation as requested."
+    fi
 
     # --- Step 1: Python Virtual Environment ---
     current_step=1
