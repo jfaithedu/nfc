@@ -372,7 +372,8 @@ def get_all_tags():
         with DatabaseConnection(db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT t.*, m.title as media_title 
+                SELECT t.*, m.title as media_title, m.url as media_url, 
+                       m.source_url as media_source_url
                 FROM tags t
                 LEFT JOIN media m ON t.media_id = m.id
                 ORDER BY t.last_used DESC
@@ -387,6 +388,37 @@ def get_all_tags():
     except Exception as e:
         logger.error(f"Error retrieving all tags: {str(e)}")
         raise DatabaseQueryError(f"Failed to get all tags: {str(e)}")
+        
+def get_tags_without_media():
+    """
+    Get all tags that have no associated media or have media with missing URLs.
+
+    Returns:
+        list: Tags with no media or with media missing URLs
+    """
+    try:
+        with DatabaseConnection(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT t.*, m.title as media_title, m.url as media_url, 
+                       m.source_url as media_source_url, m.id as media_id
+                FROM tags t
+                LEFT JOIN media m ON t.media_id = m.id
+                WHERE t.media_id IS NULL OR 
+                      ((m.url IS NULL OR m.url = '') AND 
+                       (m.source_url IS NULL OR m.source_url = ''))
+                ORDER BY t.last_used DESC
+            """)
+            
+            result = []
+            for row in cursor.fetchall():
+                tag_dict = dict(row)
+                result.append(tag_dict)
+                
+            return result
+    except Exception as e:
+        logger.error(f"Error retrieving tags without media: {str(e)}")
+        raise DatabaseQueryError(f"Failed to get tags without media: {str(e)}")
 
 def save_media_info(media_id, info):
     """

@@ -35,7 +35,16 @@ def register_routes(app):
     @require_auth
     def get_all_tags():
         """Get all registered NFC tags."""
-        tags = db_manager.get_all_tags()
+        # Check for filter parameter
+        filter_type = request.args.get('filter')
+        
+        if filter_type == 'missing_url':
+            # Find tags with no associated URL
+            tags = db_manager.get_tags_without_media()
+        else:
+            # Get all tags
+            tags = db_manager.get_all_tags()
+            
         return jsonify({
             'success': True,
             'data': {
@@ -158,24 +167,45 @@ def register_routes(app):
         if not data:
             raise InvalidRequestError("Missing request body")
         
-        if 'media_id' not in data:
-            raise InvalidRequestError("media_id is required")
-        
-        # Verify media exists
-        media = db_manager.get_media(data['media_id'])
-        if not media:
-            raise ResourceNotFoundError(f"Media with ID {data['media_id']} not found")
-        
-        # Associate tag with media
-        updated_tag = db_manager.update_tag(tag_uid, {'media_id': data['media_id']})
-        
-        return jsonify({
-            'success': True,
-            'data': {
-                'tag': updated_tag,
-                'media': media
-            }
-        })
+        # Allow associating by media_id or directly by URL
+        if 'media_id' in data:
+            # Verify media exists
+            media = db_manager.get_media(data['media_id'])
+            if not media:
+                raise ResourceNotFoundError(f"Media with ID {data['media_id']} not found")
+            
+            # Associate tag with media
+            updated_tag = db_manager.update_tag(tag_uid, {'media_id': data['media_id']})
+            
+            return jsonify({
+                'success': True,
+                'data': {
+                    'tag': updated_tag,
+                    'media': media
+                }
+            })
+        elif 'url' in data:
+            # Create/get media by URL and associate with tag
+            try:
+                media = db_manager.add_or_get_media_by_url(data['url'], tag_uid)
+                if not media:
+                    raise InvalidRequestError(f"Failed to create or find media for URL: {data['url']}")
+                
+                # Re-fetch tag with updated association
+                updated_tag = db_manager.get_tag(tag_uid)
+                
+                return jsonify({
+                    'success': True,
+                    'data': {
+                        'tag': updated_tag,
+                        'media': media
+                    }
+                })
+            except Exception as e:
+                logger.error(f"Error associating tag with URL: {e}")
+                raise InvalidRequestError(f"Failed to associate tag with URL: {str(e)}")
+        else:
+            raise InvalidRequestError("Either media_id or url is required")
 
     @app.route('/api/tags/last-detected', methods=['GET'])
     @require_auth

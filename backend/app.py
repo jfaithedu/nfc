@@ -96,12 +96,21 @@ def main_loop():
                 
                 # Playback
                 if media_info:
-                    # Stop any currently playing media
-                    audio_controller.stop()
-                    
-                    # Prepare and play the media
-                    media_path = media_manager.prepare_media(media_info)
-                    audio_controller.play(media_path)
+                    try:
+                        # Stop any currently playing media
+                        audio_controller.stop()
+                        
+                        # Check if media_info has a source_url
+                        if not media_info.get('source_url') and not media_info.get('url'):
+                            logger.warning(f"Tag {tag_uid} has a media entry but no source URL")
+                            audio_controller.play_error_sound()
+                        else:
+                            # Prepare and play the media
+                            media_path = media_manager.prepare_media(media_info)
+                            audio_controller.play(media_path)
+                    except Exception as e:
+                        logger.error(f"Error during media playback: {e}")
+                        audio_controller.play_error_sound()
                 else:
                     logger.warning(f"Unknown tag: UID={tag_uid}, NDEF={ndef_info}")
                     audio_controller.play_error_sound()
