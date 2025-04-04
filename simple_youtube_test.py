@@ -54,6 +54,8 @@ def download_youtube_audio(url, output_path=None):
         "-x",  # Extract audio
         "--audio-format", "mp3",  # Convert to mp3
         "--audio-quality", "192K",  # Use 192K quality
+        "--no-cache-dir",  # Don't use cache
+        "--no-cookies",  # Don't use cookies
         "-o", output_path,  # Output file
         url  # YouTube URL
     ]
