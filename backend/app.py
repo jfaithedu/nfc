@@ -9,6 +9,11 @@ and media playback.
 
 import time
 import logging
+import sys
+import os
+
+# Add the parent directory to Python path to allow backend.* imports
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from modules.nfc import nfc_controller
 from modules.database import db_manager
 from modules.media import media_manager
