@@ -22,9 +22,36 @@ from .exceptions import (
     YouTubeDownloadError
 )
 
-# Switch to absolute imports to avoid relative import issues
-from backend.modules.database import db_manager
-from backend.config import CONFIG
+# Use relative imports correctly within the package
+from ..database import db_manager
+# Import config using a direct filesystem approach
+import os
+import sys
+import importlib.util
+
+# Get the backend directory path
+backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+config_path = os.path.join(backend_dir, 'config.py')
+
+# Add the backend directory to the path if it's not already there
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
+
+# Import the CONFIG from config.py
+try:
+    spec = importlib.util.spec_from_file_location("config", config_path)
+    config_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(config_module)
+    CONFIG = config_module.CONFIG
+except Exception as e:
+    print(f"Error importing CONFIG: {e}")
+    # Provide a default config as fallback
+    CONFIG = {
+        'media': {
+            'cache_dir': os.path.expanduser("~/.nfc_player/media_cache"),
+            'max_cache_size_mb': 1000
+        }
+    }
 
 # Set up logger
 logger = logging.getLogger(__name__)
