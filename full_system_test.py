@@ -1012,10 +1012,16 @@ def test_database():
             print("Place the tag on the reader and press Enter...")
             input()
             
-            tag_uid, _ = nfc_controller.poll_for_tag()
-            if not tag_uid:
+            result = nfc_controller.poll_for_tag(read_ndef=False)
+            if not result:
                 print("❌ No tag detected")
                 continue
+            
+            # Handle both possible return types
+            if isinstance(result, tuple) and len(result) == 2:
+                tag_uid, _ = result  # Unpack tuple
+            else:
+                tag_uid = result  # Just the UID
             
             print(f"✅ Tag detected: {tag_uid}")
             
@@ -1064,10 +1070,16 @@ def test_database():
             print("Place the tag on the reader and press Enter...")
             input()
             
-            tag_uid, _ = nfc_controller.poll_for_tag()
-            if not tag_uid:
+            result = nfc_controller.poll_for_tag(read_ndef=False)
+            if not result:
                 print("❌ No tag detected")
                 continue
+            
+            # Handle both possible return types
+            if isinstance(result, tuple) and len(result) == 2:
+                tag_uid, _ = result  # Unpack tuple
+            else:
+                tag_uid = result  # Just the UID
             
             print(f"✅ Tag detected: {tag_uid}")
             
