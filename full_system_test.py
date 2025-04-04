@@ -35,6 +35,7 @@ from backend.config import CONFIG
 nfc_detection_thread = None
 nfc_detection_running = False
 _nfc_exit_event = None  # Event to signal the continuous polling to stop
+_last_detected_tag = None  # Track the last detected tag UID for tag removal detection
 
 def print_header(title):
     """Print a formatted header."""
@@ -267,12 +268,51 @@ def test_bluetooth():
         elif choice == '5':
             # Test audio playback
             print_subheader("Test Audio Playback")
-            print("Playing test sound...")
             
-            if audio_controller.test_audio_output():
-                print("✅ Audio test successful")
+            # Check if we have a connected Bluetooth device
+            connected_device = audio_controller.get_connected_device()
+            if not connected_device:
+                print("⚠️ No Bluetooth device connected")
+                print("Attempting to play through default audio output...")
             else:
-                print("❌ Audio test failed")
+                print(f"Connected to: {connected_device.get('name', 'Unknown')}")
+            
+            print("\nChoose what to play:")
+            print("  1. System test sound")
+            print("  2. Sample MP3 file")
+            print("  3. Cancel")
+            
+            test_choice = input("\nEnter choice (1-3): ").strip()
+            
+            if test_choice == '1':
+                print("Playing test sound...")
+                if audio_controller.test_audio_output():
+                    print("✅ Audio test successful")
+                else:
+                    print("❌ Audio test failed")
+            elif test_choice == '2':
+                # Play a sample MP3 file
+                sample_path = os.path.join(current_dir, "backend/modules/audio/sample.mp3")
+                if os.path.exists(sample_path):
+                    print(f"Playing sample MP3: {sample_path}")
+                    
+                    try:
+                        if audio_controller.play(sample_path):
+                            print("✅ Playback started")
+                            
+                            # Wait for playback to complete or user interruption
+                            print("Press Enter to stop playback...")
+                            input()
+                            audio_controller.stop()
+                            print("Playback stopped")
+                        else:
+                            print("❌ Failed to start playback")
+                    except Exception as e:
+                        print(f"❌ Error playing sample: {e}")
+                else:
+                    print(f"❌ Sample file not found at: {sample_path}")
+            else:
+                print("Test cancelled")
             
         elif choice == '6':
             # Back to main menu
@@ -624,9 +664,27 @@ def tag_callback(uid, ndef_info=None):
         # Get the media path and play
         try:
             print("  Preparing media for playback...")
+            
+            # Check if we have a connected Bluetooth device
+            connected_device = audio_controller.get_connected_device()
+            if not connected_device:
+                print("  ⚠️ Warning: No Bluetooth device connected")
+                print("  Will attempt to play through default audio output")
+            else:
+                print(f"  Audio will play through: {connected_device.get('name', 'Unknown device')}")
+            
+            # Prepare the media (download/cache if needed)
             media_path = media_manager.prepare_media(media_info)
             print(f"  Playing {media_path}...")
-            audio_controller.play(media_path)
+            
+            # Start playback
+            if audio_controller.play(media_path):
+                print("  ✅ Playback started")
+                print("  To stop playback, place the tag on the reader again or remove it")
+                # Note: We don't wait for input here because this is in the continuous detection mode
+                # The user can stop playback by interrupting the detection
+            else:
+                print("  ❌ Failed to start playback")
         except Exception as e:
             print(f"  ❌ Error playing media: {e}")
     else:
@@ -662,23 +720,50 @@ def tag_callback(uid, ndef_info=None):
             # If we have a URI, check if it's a YouTube URL
             if uri and ('youtube.com' in uri or 'youtu.be' in uri):
                 try:
+                    print("  Found YouTube URL in tag")
+                    print(f"  URL: {uri}")
                     print("  Getting YouTube info...")
-                    youtube_info = media_manager.get_media_info(uri)
-                    print(f"  Title: {youtube_info.get('title')}")
                     
-                    # Ask if we should play it
-                    play_it = input("  Play this YouTube video? (y/n): ").strip().lower() == 'y'
-                    if play_it:
-                        print("  Adding to database...")
-                        media_id = db_manager.add_or_get_media_by_url(uri, tag_uid=uid)
-                        if media_id:
-                            media_info = db_manager.get_media_info(media_id)
-                            print("  Preparing media for playback...")
-                            media_path = media_manager.prepare_media(media_info)
-                            print(f"  Playing {media_path}...")
-                            audio_controller.play(media_path)
-                        else:
-                            print("  ❌ Failed to add media to database")
+                    # Fetch video information
+                    youtube_info = media_manager.get_media_info(uri)
+                    if youtube_info:
+                        print(f"  ✅ Title: {youtube_info.get('title')}")
+                        print(f"  Duration: {youtube_info.get('duration')} seconds")
+                        print(f"  Channel: {youtube_info.get('uploader', 'Unknown')}")
+                        
+                        # Ask if we should play it
+                        play_it = input("  Play this YouTube video? (y/n): ").strip().lower() == 'y'
+                        if play_it:
+                            print("  Adding to database...")
+                            media_id = db_manager.add_or_get_media_by_url(uri, tag_uid=uid)
+                            if media_id:
+                                media_info = db_manager.get_media_info(media_id)
+                                
+                                # Check Bluetooth connectivity
+                                connected_device = audio_controller.get_connected_device()
+                                if not connected_device:
+                                    print("  ⚠️ Warning: No Bluetooth device connected")
+                                    print("  Will attempt to play through default audio output")
+                                else:
+                                    print(f"  Audio will play through: {connected_device.get('name', 'Unknown device')}")
+                                
+                                print("  Preparing media for playback...")
+                                try:
+                                    # Prepare and play media
+                                    media_path = media_manager.prepare_media(media_info)
+                                    print(f"  Playing {media_path}...")
+                                    
+                                    if audio_controller.play(media_path):
+                                        print("  ✅ Playback started")
+                                        print("  To stop playback, place the tag on the reader again or remove it")
+                                    else:
+                                        print("  ❌ Failed to start playback")
+                                except Exception as play_e:
+                                    print(f"  ❌ Error during playback: {play_e}")
+                            else:
+                                print("  ❌ Failed to add media to database")
+                    else:
+                        print("  ❌ Could not retrieve YouTube video information")
                 except Exception as e:
                     print(f"  ❌ Error processing YouTube URL: {e}")
 
