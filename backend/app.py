@@ -60,11 +60,21 @@ def main_loop():
     
     try:
         while True:
-            # Poll for NFC tag - now returns (uid, ndef_info) tuple
-            tag_uid, ndef_info = nfc_controller.poll_for_tag()
+            # Poll for NFC tag
+            poll_result = nfc_controller.poll_for_tag()
             
-            # Initialize media_info to None
+            # Initialize variables
+            tag_uid = None
+            ndef_info = None 
             media_info = None
+            
+            # Check if tag was detected
+            if poll_result is not None:
+                if isinstance(poll_result, tuple) and len(poll_result) == 2:
+                    tag_uid, ndef_info = poll_result
+                else:
+                    # Handle case where only UID is returned (not a tuple)
+                    tag_uid = poll_result
             
             if tag_uid:
                 logger.info(f"Tag detected: {tag_uid}")
