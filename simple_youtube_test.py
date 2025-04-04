@@ -140,10 +140,11 @@ def main():
             print_header("Main Menu")
             print("1. Download and play a YouTube video")
             print("2. Play a downloaded audio file")
-            print("3. Show connected device")
-            print("4. Quit")
+            print("3. Stream a YouTube video (no download)")
+            print("4. Show connected device")
+            print("5. Quit")
             
-            choice = input("\nEnter choice (1-4): ").strip()
+            choice = input("\nEnter choice (1-5): ").strip()
             
             if choice == '1':
                 # Ask for YouTube URL
@@ -263,12 +264,112 @@ def main():
                         print("Invalid file path or file doesn't exist.")
             
             elif choice == '3':
+                # Stream YouTube video
+                print_header("YouTube Streaming (No Download)")
+                youtube_url = input("Enter a YouTube URL: ").strip()
+                if not youtube_url:
+                    print("No URL provided, cancelling.")
+                    continue
+                
+                print("Setting up streaming from YouTube...")
+                print("This may take a moment to initialize the stream...")
+                
+                # Get stream URL using yt-dlp
+                print("Getting audio stream URL from YouTube...")
+                try:
+                    # Get the stream URL
+                    cmd = ["yt-dlp", "-f", "bestaudio", "-g", youtube_url]
+                    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                    stream_url = result.stdout.strip()
+                    
+                    if not stream_url:
+                        print("❌ Failed to get stream URL")
+                        continue
+                    
+                    print("✅ Stream URL obtained")
+                    
+                    # Create a temporary file for the mpv fifo
+                    fifo_path = os.path.join(current_dir, f"stream_fifo_{uuid.uuid4()}")
+                    try:
+                        # Create a FIFO (named pipe)
+                        os.mkfifo(fifo_path)
+                        print(f"Created FIFO at {fifo_path}")
+                        
+                        # Start background process for streaming
+                        print("Starting streaming process...")
+                        stream_cmd = [
+                            "ffmpeg", 
+                            "-loglevel", "error",
+                            "-reconnect", "1", 
+                            "-reconnect_streamed", "1",
+                            "-i", stream_url, 
+                            "-f", "mp3", 
+                            "-acodec", "libmp3lame", 
+                            "-ar", "44100", 
+                            "-ab", "128k",
+                            fifo_path
+                        ]
+                        
+                        # Start ffmpeg in background
+                        print("Starting ffmpeg process...")
+                        ffmpeg_process = subprocess.Popen(
+                            stream_cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE
+                        )
+                        
+                        # Give ffmpeg a moment to start
+                        time.sleep(2)
+                        
+                        # Play the stream through audio controller
+                        print("Playing stream through Bluetooth device...")
+                        if audio_controller.play(fifo_path):
+                            print("✅ Playback started")
+                            
+                            # Wait for playback to complete or user interruption
+                            print("Streaming... (Press Ctrl+C to stop)")
+                            try:
+                                while audio_controller.is_playing():
+                                    time.sleep(1)
+                            except KeyboardInterrupt:
+                                print("\nStreaming interrupted by user.")
+                            
+                            print("Playback completed or stopped.")
+                        else:
+                            print("❌ Failed to start playback")
+                    
+                    except Exception as e:
+                        print(f"Streaming error: {e}")
+                    finally:
+                        # Clean up
+                        print("Cleaning up...")
+                        try:
+                            # Stop ffmpeg if still running
+                            if 'ffmpeg_process' in locals() and ffmpeg_process:
+                                ffmpeg_process.terminate()
+                                ffmpeg_process.wait(timeout=5)
+                            
+                            # Remove the FIFO
+                            if os.path.exists(fifo_path):
+                                os.unlink(fifo_path)
+                                print(f"Removed FIFO: {fifo_path}")
+                        except Exception as e:
+                            print(f"Error during cleanup: {e}")
+                            
+                except subprocess.CalledProcessError as e:
+                    print(f"❌ Error getting stream URL: {e}")
+                    if e.stderr:
+                        print(f"Error output: {e.stderr}")
+                except Exception as e:
+                    print(f"❌ Error: {e}")
+            
+            elif choice == '4':
                 # Show connected device
                 device = audio_controller.get_connected_device()
                 print("\nConnected device:")
                 print_device_info(device)
             
-            elif choice == '4':
+            elif choice == '5':
                 # Quit
                 break
                 
