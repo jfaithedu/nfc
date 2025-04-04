@@ -51,15 +51,15 @@ def download_youtube_audio(url, output_path=None):
     # Prepare yt-dlp command
     cmd = [
         "yt-dlp",
-        "-f", "bestaudio",  # Best audio format
+        "-f", "bestaudio[filesize<20M]/bestaudio",  # Smaller audio files preferred
         "--extract-audio",  # Extract audio
         "--audio-format", "mp3",  # Convert to mp3
-        "--audio-quality", "192K",  # Use 192K quality
+        "--audio-quality", "128K",  # Lower quality for faster conversion
         "--no-cache-dir",  # Don't use cache
         "--no-cookies",  # Don't use cookies
-        "--embed-metadata",  # Include metadata
-        "--prefer-ffmpeg",  # Prefer using ffmpeg for conversion
-        "--ignore-errors",  # Ignore errors during extraction
+        "--no-check-certificates",  # Skip certificate validation
+        "--concurrent-fragments", "4",  # Download with multiple connections
+        "--throttled-rate", "100K",  # Limit bandwidth usage to avoid stalling
         "-o", output_path,  # Output file
         url  # YouTube URL
     ]
