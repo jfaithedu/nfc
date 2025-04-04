@@ -22,7 +22,7 @@ from ...media import media_manager
 from ..exceptions import ResourceNotFoundError, InvalidRequestError
 from ..middleware.auth import require_auth, verify_pin
 from backend.utils.logger import get_logger
-from backend.config import CONFIG, save_config
+from . import CONFIG, save_config
 
 logger = get_logger(__name__)
 
