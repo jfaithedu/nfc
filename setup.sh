@@ -37,6 +37,8 @@ setup_python_venv() {
         fi
         # Create virtual environment WITH system packages to use system's python3-gi
         echo "Creating new virtual environment (with system packages)..."
+        # Make sure python3-venv and python3-full are installed for proper venv creation
+        apt-get install -y python3-venv python3-full
         python3 -m venv "$VENV_DIR" --system-site-packages
 
         # Set ownership early if creating venv as root
@@ -63,9 +65,12 @@ setup_python_venv() {
 
     # Install Python dependencies for all modules
     echo "Installing Python dependencies for all modules..."
-    pip install -r "$PROJECT_ROOT/backend/requirements.txt"
+    # Skip PyGObject installation since we're using system packages
+    grep -v "PyGObject" "$PROJECT_ROOT/backend/requirements.txt" > "$PROJECT_ROOT/backend/requirements_filtered.txt"
+    pip install -r "$PROJECT_ROOT/backend/requirements_filtered.txt"
     pip install -r "$PROJECT_ROOT/backend/modules/audio/requirements.txt"
     pip install -r "$PROJECT_ROOT/backend/modules/nfc/requirements.txt"
+    rm "$PROJECT_ROOT/backend/requirements_filtered.txt"
 
     # Ensure test scripts are executable (idempotent)
     chmod +x "$PROJECT_ROOT/backend/modules/audio/interactive_test.py"
@@ -273,6 +278,8 @@ main() {
         gobject-introspection \
         python3-cairo \
         python3-gi \
+        python3-gi-cairo \
+        gir1.2-gtk-3.0 \
         python3-cairo-dev \
         libcairo-gobject2 \
         ffmpeg
@@ -321,6 +328,11 @@ main() {
     
     # Setup frontend
     setup_frontend
+    
+    # Verify PyGObject installation
+    echo "Verifying PyGObject installation..."
+    source "$VENV_DIR/bin/activate"
+    python3 -c "import gi; print('PyGObject (gi) is properly installed and accessible in the virtual environment')"
     
     # Verify setup
     verify_setup
