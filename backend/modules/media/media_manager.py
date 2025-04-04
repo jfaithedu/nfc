@@ -22,8 +22,9 @@ from .exceptions import (
     YouTubeDownloadError
 )
 
-from ..database import db_manager
-from ...config import CONFIG
+# Switch to absolute imports to avoid relative import issues
+from backend.modules.database import db_manager
+from backend.config import CONFIG
 
 # Set up logger
 logger = logging.getLogger(__name__)
