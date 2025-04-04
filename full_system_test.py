@@ -355,11 +355,17 @@ def test_nfc():
             print("Please place a tag on the reader...")
             print("Waiting for tag (10 seconds)...")
             
+            # Make sure NFC controller is initialized
+            if not nfc_controller._initialized:
+                print("NFC controller not initialized. Initializing...")
+                nfc_controller.initialize()
+            
             # Try for up to 10 seconds
             start_time = time.time()
             detected = False
             
             try:
+                print("Starting tag polling process...")
                 while time.time() - start_time < 10:
                     # Just get the UID first, like in test_nfc.py
                     result = nfc_controller.poll_for_tag(read_ndef=False)
@@ -498,12 +504,27 @@ def test_nfc():
             print("\nPlace tag on reader and press Enter to write...")
             input()
             
+            print("Polling for tag (this may take a few seconds)...")
             # First detect the tag to ensure it's present
             try:
-                # Poll for the tag first (without reading NDEF data)
+                # Make sure NFC controller is initialized
+                if not nfc_controller._initialized:
+                    print("Re-initializing NFC controller...")
+                    nfc_controller.initialize()
+                
+                # Poll with timeout and retries for better reliability
+                print(".", end="", flush=True)
                 result = nfc_controller.poll_for_tag(read_ndef=False)
+                print(".", end="", flush=True)
+                
                 if not result:
-                    print("❌ No tag detected! Please make sure the tag is on the reader.")
+                    # Try one more time with longer timeout
+                    print("Retrying tag detection...")
+                    time.sleep(1)  # Wait a moment
+                    result = nfc_controller.poll_for_tag(read_ndef=False)
+                
+                if not result:
+                    print("\n❌ No tag detected! Please make sure the tag is on the reader.")
                     continue
                 
                 # Convert the result to a UID string
@@ -512,10 +533,11 @@ def test_nfc():
                 else:
                     uid = result
                 
-                print(f"✅ Tag detected: {uid}")
+                print(f"\n✅ Tag detected: {uid}")
                 print(f"Writing URL: {url}")
                 
                 # Now write to the tag
+                print("Writing data to tag (please keep tag on reader)...")
                 if nfc_controller.write_ndef_uri(url):
                     print("✅ Successfully wrote URL to tag")
                     
@@ -562,10 +584,26 @@ def test_nfc():
             # First make sure we have the tag
             uid = None
             try:
-                # Poll for tag first to ensure it's present (without reading NDEF yet)
+                print("Polling for tag (this may take a few seconds)...")
+                
+                # Make sure NFC controller is initialized
+                if not nfc_controller._initialized:
+                    print("Re-initializing NFC controller...")
+                    nfc_controller.initialize()
+                
+                # Poll with timeout and retries for better reliability
+                print(".", end="", flush=True)
                 result = nfc_controller.poll_for_tag(read_ndef=False)
+                print(".", end="", flush=True)
+                
                 if not result:
-                    print("❌ No tag detected. Please make sure the tag is on the reader.")
+                    # Try one more time with longer timeout
+                    print("Retrying tag detection...")
+                    time.sleep(1)  # Wait a moment
+                    result = nfc_controller.poll_for_tag(read_ndef=False)
+                
+                if not result:
+                    print("\n❌ No tag detected. Please make sure the tag is on the reader.")
                     continue
                 
                 # Handle the return value which could be just a UID or a tuple
@@ -573,7 +611,7 @@ def test_nfc():
                 if isinstance(result, tuple) and len(result) == 2:
                     uid, _ = result
                 
-                print(f"✅ Tag detected: {uid}")
+                print(f"\n✅ Tag detected: {uid}")
                 
                 # Now try to read NDEF data
                 ndef_data = nfc_controller.read_ndef_data()
@@ -800,6 +838,29 @@ def nfc_detection_worker():
     _nfc_exit_event = exit_event
     
     try:
+        # First ensure NFC controller is initialized
+        if not nfc_controller._initialized:
+            print("NFC controller not initialized. Initializing...")
+            success = nfc_controller.initialize()
+            if not success:
+                print("❌ Failed to initialize NFC controller")
+                nfc_detection_running = False
+                return
+            else:
+                print("✅ NFC controller initialized successfully")
+        
+        # Verify NFC hardware is working with a simple poll
+        print("Testing NFC hardware with a quick poll...")
+        try:
+            test_poll = nfc_controller.poll_for_tag(read_ndef=False)
+            if test_poll:
+                print(f"✅ NFC hardware working - tag detected: {test_poll}")
+            else:
+                print("ℹ️ No tag detected during test poll (this is normal if no tag is present)")
+        except Exception as poll_e:
+            print(f"⚠️ Warning: Test poll failed: {poll_e}")
+            # Continue anyway, the continuous poll might still work
+        
         # Set up tag detection callback
         def tag_callback_wrapper(uid, ndef_info=None):
             global _last_detected_tag
@@ -813,6 +874,9 @@ def nfc_detection_worker():
                         if ndef_info is None:
                             ndef_info = ndef_data
                         uid = uid_str
+                    
+                    # Provide feedback that polling is working
+                    print(".", end="", flush=True)
                     
                     # Check if this is a new tag or tag removal
                     if uid is None or uid == "":
@@ -841,6 +905,7 @@ def nfc_detection_worker():
                                     pass
                             
                             # Call our tag callback for the new tag
+                            print(f"\n✅ New tag detected: {uid}")
                             tag_callback(uid, ndef_info)
                             
                             # Update last detected tag
@@ -851,18 +916,20 @@ def nfc_detection_worker():
                             print("\nWaiting for 2 seconds before detecting next tag...")
                             time.sleep(2)
                             print("Ready for next tag")
-                        else:
-                            # Same tag detected again, no need to process
-                            pass
+                        # Same tag detected again, silently ignore
                 except Exception as e:
-                    print(f"❌ Error in tag callback: {e}")
+                    print(f"\n❌ Error in tag callback: {e}")
             
+        print("Starting continuous polling - waiting for tags...")
+        print("Press Enter at any time to stop")
+        
         # Start the continuous polling (this will run until exit_event is set)
         nfc_controller.continuous_poll(
             callback=tag_callback_wrapper,
-            interval=0.1, 
+            interval=0.2,  # Slightly longer interval for more stability
             exit_event=exit_event,
-            read_ndef=True
+            read_ndef=True,
+            deduplicate=True
         )
     except Exception as e:
         print(f"❌ Error during NFC detection: {e}")
@@ -1348,18 +1415,40 @@ def test_database():
             print("Place the tag on the reader and press Enter...")
             input()
             
-            result = nfc_controller.poll_for_tag(read_ndef=False)
-            if not result:
-                print("❌ No tag detected")
+            print("Polling for tag (this may take a few seconds)...")
+            try:
+                # Make sure NFC controller is initialized
+                if not nfc_controller._initialized:
+                    print("Re-initializing NFC controller...")
+                    nfc_controller.initialize()
+                
+                # Poll with timeout and retries for better reliability  
+                print(".", end="", flush=True)
+                result = nfc_controller.poll_for_tag(read_ndef=False)
+                print(".", end="", flush=True)
+                
+                if not result:
+                    # Try one more time with longer timeout
+                    print("Retrying tag detection...")
+                    time.sleep(1)  # Wait a moment
+                    result = nfc_controller.poll_for_tag(read_ndef=False)
+                
+                if not result:
+                    print("\n❌ No tag detected")
+                    continue
+                
+                # Handle both possible return types
+                if isinstance(result, tuple) and len(result) == 2:
+                    tag_uid, _ = result  # Unpack tuple
+                else:
+                    tag_uid = result  # Just the UID
+                
+                print(f"\n✅ Tag detected: {tag_uid}")
+            except Exception as e:
+                print(f"\n❌ Error detecting tag: {e}")
+                print("This could be due to hardware issues or disconnected NFC module.")
+                print("Try reinitializing the system from the main menu.")
                 continue
-            
-            # Handle both possible return types
-            if isinstance(result, tuple) and len(result) == 2:
-                tag_uid, _ = result  # Unpack tuple
-            else:
-                tag_uid = result  # Just the UID
-            
-            print(f"✅ Tag detected: {tag_uid}")
             
             # Check if tag has an association
             current_media = db_manager.get_media_for_tag(tag_uid)
