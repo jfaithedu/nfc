@@ -423,6 +423,7 @@ class BluetoothManager:
             # Trust device if not already trusted
             if not properties.get('Trusted', False):
                 props_interface.Set(DEVICE_INTERFACE, 'Trusted', True)
+                logger.info(f"Set device {device_address} as trusted")
                 
             # Pair if not already paired
             if not properties.get('Paired', False):
@@ -439,6 +440,43 @@ class BluetoothManager:
                 if properties.get('Connected', False):
                     # Get updated device info
                     self.connected_device = device_address
+                    
+                    # Check if device supports audio sink profile (A2DP)
+                    uuids = properties.get('UUIDs', [])
+                    logger.info(f"Device UUIDs: {uuids}")
+                    
+                    # The Audio Sink UUID for A2DP
+                    a2dp_sink_uuid = '0000110b-0000-1000-8000-00805f9b34fb'
+                    
+                    # Check if device supports A2DP sink
+                    if a2dp_sink_uuid in uuids:
+                        logger.info(f"Device {device_address} supports A2DP audio sink")
+                        
+                        # Ensure A2DP profile is connected
+                        try:
+                            # Connect specifically to the A2DP profile
+                            subprocess.run(
+                                ["bluetoothctl", "connect", device_address],
+                                capture_output=True,
+                                text=True
+                            )
+                            
+                            # Check if bluealsa-aplay recognizes the device
+                            result = subprocess.run(
+                                ["bluealsa-aplay", "-l"],
+                                capture_output=True,
+                                text=True
+                            )
+                            
+                            if device_address in result.stdout:
+                                logger.info(f"Device {device_address} successfully registered with BlueALSA")
+                            else:
+                                logger.warning(f"Device {device_address} not found in BlueALSA device list")
+                                
+                        except Exception as e:
+                            logger.warning(f"Error setting up A2DP profile: {e}")
+                    else:
+                        logger.warning(f"Device {device_address} does not support A2DP audio sink")
                     
                     # Save to paired devices
                     if device_address not in self.paired_devices:

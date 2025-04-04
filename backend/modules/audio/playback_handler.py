@@ -586,7 +586,7 @@ class AudioPlayer:
 
 def test_audio_output(device_address: str = None) -> bool:
     """
-    Test audio output using BlueALSA.
+    Test audio output using a test sound.
     
     Args:
         device_address (str, optional): Bluetooth device address to test.
@@ -612,49 +612,50 @@ def test_audio_output(device_address: str = None) -> bool:
             logger.warning("No test audio file found")
             return False
         
-        # Use bluealsa-aplay if device address is provided
-        if device_address:
-            logger.info(f"Testing audio with bluealsa-aplay to device {device_address} using file {test_file}")
-            cmd = ["bluealsa-aplay", device_address, test_file]
-            logger.info(f"Running command: {' '.join(cmd)}")
-            
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True
-            )
-            
-            if result.returncode != 0:
-                logger.error(f"bluealsa-aplay failed with exit code {result.returncode}")
-                logger.error(f"stderr: {result.stderr}")
-                logger.error(f"stdout: {result.stdout}")
-                return False
-            
-            logger.info("bluealsa-aplay command succeeded")
-            return True
+        logger.info(f"Using test file: {test_file}")
         
-        # Otherwise use regular aplay or play command
-        else:
-            if test_file.endswith('.wav'):
-                cmd = ["aplay", test_file]
-                logger.info(f"Testing audio with aplay to default device using file {test_file}")
+        # Create a temporary GStreamer player to test audio
+        player = AudioPlayer()
+        
+        try:
+            # If we have a device address, try to output to the device
+            if device_address:
+                logger.info(f"Testing audio output to Bluetooth device: {device_address}")
+                
+                # Configure the audio sink for the Bluetooth device
+                audiosink = Gst.ElementFactory.make("alsasink", "audiosink")
+                if audiosink:
+                    # Set device property to use BlueALSA
+                    device_spec = f"bluealsa:DEV={device_address},PROFILE=a2dp"
+                    logger.info(f"Using BlueALSA sink: {device_spec}")
+                    audiosink.set_property("device", device_spec)
+                    player.playbin.set_property("audio-sink", audiosink)
+            
+            # Load and play the test file
+            player.load_media(test_file)
+            player.play()
+            
+            # Wait a moment for audio to start playing
+            time.sleep(1)
+            
+            # Check if playing
+            if player.get_state() == "playing":
+                logger.info("Audio playback started successfully")
+                # Let it play a bit more
+                time.sleep(2)
+                player.stop()
+                return True
             else:
-                # For mp3 files, try using play from SoX
-                cmd = ["play", test_file]
-                logger.info(f"Testing audio with SoX play to default device using file {test_file}")
-            
-            logger.info(f"Running command: {' '.join(cmd)}")
-            
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            if result.returncode != 0:
-                logger.error(f"Audio playback command failed with exit code {result.returncode}")
-                logger.error(f"stderr: {result.stderr}")
-                logger.error(f"stdout: {result.stdout}")
+                logger.error("Failed to start audio playback")
                 return False
+                
+        finally:
+            # Clean up
+            player.shutdown()
             
-            logger.info("Audio playback command succeeded")
-            return True
+    except Exception as e:
+        logger.error(f"Audio test failed: {e}")
+        return False
     
     except Exception as e:
         logger.error(f"Audio test failed: {e}")
