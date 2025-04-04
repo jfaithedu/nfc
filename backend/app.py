@@ -82,8 +82,6 @@ def main_loop():
             # Tag removal detection
             if previous_tag_uid and not tag_uid:
                 logger.info("Tag removed, stopping playback")
-                # Disable looping before stopping playback
-                audio_controller.set_loop(False)
                 audio_controller.stop()
                 previous_tag_uid = None
             
@@ -119,11 +117,6 @@ def main_loop():
                         else:
                             # Prepare and play the media
                             media_path = media_manager.prepare_media(media_info)
-                            
-                            # Enable looping since the tag is on the reader
-                            audio_controller.set_loop(True)
-                            
-                            # Play the media
                             audio_controller.play(media_path)
                             
                             # Save current tag UID

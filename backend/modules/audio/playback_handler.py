@@ -56,7 +56,6 @@ class AudioPlayer:
         self.duration = -1
         self.muted = False
         self.previous_volume = 50  # Store volume when muted
-        self.loop_playback = False  # Whether to loop playback when end of stream is reached
         
         # Events and threading
         self.bus = self.playbin.get_bus()
@@ -65,9 +64,6 @@ class AudioPlayer:
         
         # Set initial volume
         self.set_volume(self.config.get("volume", 50))
-        
-        # Set initial loop state from config
-        self.set_loop(self.config.get("loop_playback", False))
         
         # Set up BlueALSA sink
         self._configure_audio_sink()
@@ -203,16 +199,7 @@ class AudioPlayer:
         
         elif t == Gst.MessageType.EOS:
             logger.info("End of stream reached")
-            if self.loop_playback and self.current_media:
-                logger.info("Looping playback - restarting media")
-                # Simply seek to the beginning of the media
-                self.playbin.seek_simple(
-                    Gst.Format.TIME,
-                    Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
-                    0
-                )
-            else:
-                self.stop()
+            self.stop()
         
         elif t == Gst.MessageType.STATE_CHANGED:
             if message.src == self.playbin:
@@ -576,37 +563,8 @@ class AudioPlayer:
             "duration": self.get_duration(),
             "volume": self.get_volume(),
             "muted": self.muted,
-            "media": self.current_media,
-            "loop": self.loop_playback
+            "media": self.current_media
         }
-        
-    def set_loop(self, enabled: bool) -> bool:
-        """
-        Enable or disable looping playback.
-        
-        Args:
-            enabled (bool): Whether to enable looping
-            
-        Returns:
-            bool: New looping state
-        """
-        self.loop_playback = bool(enabled)
-        
-        # Save to config
-        self.config["loop_playback"] = self.loop_playback
-        self._save_config()
-        
-        logger.debug(f"Looping playback {'enabled' if self.loop_playback else 'disabled'}")
-        return self.loop_playback
-    
-    def get_loop(self) -> bool:
-        """
-        Get current looping state.
-        
-        Returns:
-            bool: Whether looping is enabled
-        """
-        return self.loop_playback
     
     def shutdown(self) -> None:
         """Perform cleanup before shutdown."""

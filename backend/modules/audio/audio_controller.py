@@ -396,7 +396,6 @@ class AudioController:
                 - duration: Total duration in seconds
                 - media_path: Path to current media
                 - volume: Current volume level
-                - loop: Whether looping is enabled
         """
         if not self.initialized or not self.player:
             return {
@@ -404,8 +403,7 @@ class AudioController:
                 "position": 0,
                 "duration": 0,
                 "media_path": None,
-                "volume": self.config.get("volume", 50),
-                "loop": self.config.get("loop_playback", False)
+                "volume": self.config.get("volume", 50)
             }
         
         try:
@@ -419,8 +417,7 @@ class AudioController:
                 "position": 0,
                 "duration": 0,
                 "media_path": self.current_media,
-                "volume": self.config.get("volume", 50),
-                "loop": self.config.get("loop_playback", False)
+                "volume": self.config.get("volume", 50)
             }
     
     def is_playing(self) -> bool:
@@ -735,46 +732,6 @@ class AudioController:
             # Call the function without device address
             from .playback_handler import test_audio_output as test_audio_func
             return test_audio_func()
-            
-    def set_loop(self, enabled: bool) -> bool:
-        """
-        Enable or disable looping playback.
-        
-        Args:
-            enabled (bool): Whether to enable looping
-            
-        Returns:
-            bool: New looping state
-        """
-        self._ensure_initialized()
-        
-        try:
-            # Update player
-            loop_state = self.player.set_loop(enabled)
-            
-            # Store in config
-            self.config["loop_playback"] = loop_state
-            self._save_config()
-            
-            return loop_state
-        except Exception as e:
-            logger.error(f"Failed to set loop state: {e}")
-            return False
-    
-    def get_loop(self) -> bool:
-        """
-        Get current looping state.
-        
-        Returns:
-            bool: Whether looping is enabled
-        """
-        if not self.initialized or not self.player:
-            return self.config.get("loop_playback", False)
-        
-        try:
-            return self.player.get_loop()
-        except Exception:
-            return self.config.get("loop_playback", False)
     
     def _ensure_initialized(self) -> None:
         """
@@ -1306,36 +1263,3 @@ def test_audio_output() -> bool:
             return False
         
     return _controller.test_audio_output()
-
-def set_loop(enabled: bool) -> bool:
-    """
-    Enable or disable looping playback.
-    
-    Args:
-        enabled (bool): Whether to enable looping
-        
-    Returns:
-        bool: New looping state
-    """
-    global _controller
-    
-    if not _controller:
-        if not initialize():
-            logger.warning("Cannot set loop: audio module not initialized")
-            return False
-    
-    return _controller.set_loop(enabled)
-
-def get_loop() -> bool:
-    """
-    Get current looping state.
-    
-    Returns:
-        bool: Whether looping is enabled
-    """
-    global _controller
-    
-    if not _controller:
-        return False
-    
-    return _controller.get_loop()
