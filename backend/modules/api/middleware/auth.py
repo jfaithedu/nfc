@@ -11,7 +11,7 @@ from flask import request, jsonify, current_app
 import jwt
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from ...utils.logger import get_logger
+from ....utils.logger import get_logger
 from ..exceptions import AuthenticationError
 
 logger = get_logger(__name__)
