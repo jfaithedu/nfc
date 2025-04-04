@@ -63,47 +63,9 @@ setup_python_venv() {
     echo "Python virtual environment set up successfully"
 }
 
-# Function to install system dependencies for audio module
+# Function to configure audio system
 setup_audio_system_deps() {
-    echo -e "\n[2/5] Installing audio module system dependencies..."
-    
-    # Install Cairo and GObject dependencies (needed for PyGObject)
-    echo "Installing Cairo and GObject dependencies..."
-    apt-get install -y --no-install-recommends \
-        libcairo2-dev \
-        pkg-config \
-        python3-dev \
-        libgirepository1.0-dev \
-        gir1.2-gtk-3.0
-    
-    # Install Bluetooth dependencies
-    echo "Installing Bluetooth dependencies..."
-    apt-get install -y --no-install-recommends \
-        bluetooth \
-        bluez \
-        bluez-tools \
-        pi-bluetooth \
-        bluealsa
-    
-    # Install D-Bus and GStreamer dependencies
-    echo "Installing D-Bus and GStreamer dependencies..."
-    apt-get install -y --no-install-recommends \
-        dbus \
-        python3-dbus \
-        python3-gi \
-        gstreamer1.0-tools \
-        gstreamer1.0-plugins-base \
-        gstreamer1.0-plugins-good \
-        gstreamer1.0-alsa \
-        python3-gst-1.0 \
-        gir1.2-gstreamer-1.0 \
-        gir1.2-gst-plugins-base-1.0
-    
-    # Install audio utilities
-    echo "Installing audio utilities..."
-    apt-get install -y --no-install-recommends \
-        alsa-utils \
-        sox
+    echo -e "\n[2/5] Configuring audio module..."
     
     # Configure BlueALSA
     echo "Configuring BlueALSA..."
@@ -163,10 +125,7 @@ EOF
 
 # Function to setup the NFC module system dependencies
 setup_nfc_system_deps() {
-    echo -e "\n[3/5] Setting up NFC module system dependencies..."
-    
-    # Install required system packages
-    apt-get install -y python3-pip python3-smbus i2c-tools python3-venv python3-full libgpiod2
+    echo -e "\n[3/5] Configuring NFC module..."
     
     # Setup GPIO and I2C access permissions
     if ! grep -q "^SUBSYSTEM==\"gpio\", GROUP=\"gpio\"" /etc/udev/rules.d/99-com.rules 2>/dev/null; then
@@ -226,12 +185,6 @@ setup_frontend() {
     # Install Node.js dependencies
     cd "$PROJECT_ROOT/frontend"
     
-    # Check if npm is installed
-    if ! command -v npm &> /dev/null; then
-        echo "npm is not installed. Installing Node.js and npm..."
-        apt-get install -y nodejs npm
-    fi
-    
     echo "Installing frontend dependencies..."
     npm install
     
@@ -285,8 +238,43 @@ verify_setup() {
 main() {
     echo "Starting comprehensive project setup..."
     
-    # Update package lists
+    # Update package lists and install all required dependencies at once
+    echo "Installing all system dependencies..."
     apt-get update
+    apt-get install -y --no-install-recommends \
+        # Audio module dependencies
+        libcairo2-dev \
+        pkg-config \
+        python3-dev \
+        libgirepository1.0-dev \
+        gir1.2-gtk-3.0 \
+        bluetooth \
+        bluez \
+        bluez-tools \
+        pi-bluetooth \
+        bluealsa \
+        dbus \
+        python3-dbus \
+        python3-gi \
+        gstreamer1.0-tools \
+        gstreamer1.0-plugins-base \
+        gstreamer1.0-plugins-good \
+        gstreamer1.0-alsa \
+        python3-gst-1.0 \
+        gir1.2-gstreamer-1.0 \
+        gir1.2-gst-plugins-base-1.0 \
+        alsa-utils \
+        sox \
+        # NFC module dependencies
+        python3-pip \
+        python3-smbus \
+        i2c-tools \
+        python3-venv \
+        python3-full \
+        libgpiod2 \
+        # Frontend dependencies
+        nodejs \
+        npm
     
     # Setup Python virtual environment
     setup_python_venv
