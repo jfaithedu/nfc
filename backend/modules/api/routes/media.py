@@ -14,8 +14,8 @@ from ...media import media_manager
 from ...audio import audio_controller
 from ..exceptions import ResourceNotFoundError, InvalidRequestError
 from ..middleware.auth import require_auth
-from ...utils.logger import get_logger
-from ...config import CONFIG
+from ....utils.logger import get_logger
+from ....config import CONFIG
 
 logger = get_logger(__name__)
 

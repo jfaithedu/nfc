@@ -11,7 +11,7 @@ from flask import request, jsonify
 from ...nfc import nfc_controller
 from ..exceptions import ResourceNotFoundError, InvalidRequestError, TagWriteError
 from ..middleware.auth import require_auth
-from ...utils.logger import get_logger
+from ....utils.logger import get_logger
 
 logger = get_logger(__name__)
 

@@ -8,7 +8,7 @@ from flask import request, jsonify
 
 from ..middleware.auth import verify_pin, generate_token
 from ..exceptions import AuthenticationError, InvalidRequestError
-from ...utils.logger import get_logger
+from ....utils.logger import get_logger
 
 logger = get_logger(__name__)
 
