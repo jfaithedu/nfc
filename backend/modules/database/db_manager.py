@@ -503,6 +503,77 @@ def get_all_media():
     except Exception as e:
         logger.error(f"Error retrieving all media: {str(e)}")
         raise DatabaseQueryError(f"Failed to get all media: {str(e)}")
+        
+def get_tag_count():
+    """
+    Get the total number of tags in the database.
+
+    Returns:
+        int: Number of tags
+    """
+    try:
+        with DatabaseConnection(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) as count FROM tags")
+            result = cursor.fetchone()
+            return result['count'] if result else 0
+    except Exception as e:
+        logger.error(f"Error getting tag count: {str(e)}")
+        raise DatabaseQueryError(f"Failed to get tag count: {str(e)}")
+        
+def get_active_tag_count():
+    """
+    Get the number of tags that have media associations.
+
+    Returns:
+        int: Number of active tags
+    """
+    try:
+        with DatabaseConnection(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) as count FROM tags WHERE media_id IS NOT NULL")
+            result = cursor.fetchone()
+            return result['count'] if result else 0
+    except Exception as e:
+        logger.error(f"Error getting active tag count: {str(e)}")
+        raise DatabaseQueryError(f"Failed to get active tag count: {str(e)}")
+        
+def get_media_count():
+    """
+    Get the total number of media entries in the database.
+
+    Returns:
+        int: Number of media entries
+    """
+    try:
+        with DatabaseConnection(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) as count FROM media")
+            result = cursor.fetchone()
+            return result['count'] if result else 0
+    except Exception as e:
+        logger.error(f"Error getting media count: {str(e)}")
+        raise DatabaseQueryError(f"Failed to get media count: {str(e)}")
+        
+def get_media_count_by_type(media_type):
+    """
+    Get the number of media entries of a specific type.
+
+    Args:
+        media_type (str): Type of media (e.g., 'youtube', 'local')
+
+    Returns:
+        int: Number of media entries of the specified type
+    """
+    try:
+        with DatabaseConnection(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) as count FROM media WHERE source = ?", (media_type,))
+            result = cursor.fetchone()
+            return result['count'] if result else 0
+    except Exception as e:
+        logger.error(f"Error getting media count by type {media_type}: {str(e)}")
+        raise DatabaseQueryError(f"Failed to get media count by type: {str(e)}")
 
 def remove_media(media_id):
     """
