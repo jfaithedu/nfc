@@ -701,9 +701,13 @@ class AudioController:
         # Get connected device
         device = self.bt_manager.get_connected_device()
         if device:
-            return test_audio_output(device.get("address"))
+            # Call the function from playback_handler with device address
+            from .playback_handler import test_audio_output as test_audio_func
+            return test_audio_func(device.get("address"))
         else:
-            return test_audio_output()
+            # Call the function without device address
+            from .playback_handler import test_audio_output as test_audio_func
+            return test_audio_func()
     
     def _ensure_initialized(self) -> None:
         """

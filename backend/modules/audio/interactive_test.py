@@ -223,10 +223,13 @@ def test_audio() -> None:
     else:
         print("Testing audio output to default audio device...")
     
-    if audio_controller.test_audio_output():
-        print("Audio test successful!")
-    else:
-        print("Audio test failed.")
+    try:
+        if audio_controller.test_audio_output():
+            print("Audio test successful!")
+        else:
+            print("Audio test failed.")
+    except Exception as e:
+        print(f"Error: {e}")
 
 
 def play_audio_file() -> None:
