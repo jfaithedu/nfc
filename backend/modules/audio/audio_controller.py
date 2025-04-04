@@ -696,7 +696,9 @@ class AudioController:
         Returns:
             dict: Bluetooth status
         """
-        status = get_bluetooth_status()
+        # Import here to avoid circular import
+        from .bluetooth_manager import get_bluetooth_status as get_basic_status
+        status = get_basic_status()
         
         # Add controller-specific info
         if self.initialized and self.bt_manager:
@@ -1226,7 +1228,24 @@ def get_bluetooth_status() -> Dict:
         from .bluetooth_manager import get_bluetooth_status as get_basic_status
         return get_basic_status()
     
-    return _controller.get_bluetooth_status()
+    # Get status directly from controller but avoid calling self.get_bluetooth_status()
+    # to prevent recursion
+    # Import here to avoid circular import
+    from .bluetooth_manager import get_bluetooth_status as get_basic_status
+    status = get_basic_status()
+    
+    # Add controller-specific info
+    if _controller.initialized and _controller.bt_manager:
+        connected_device = _controller.bt_manager.get_connected_device()
+        status["connected"] = connected_device is not None
+        status["device"] = connected_device
+        status["auto_reconnect"] = _controller.auto_reconnect
+    else:
+        status["connected"] = False
+        status["device"] = None
+        status["auto_reconnect"] = _controller.auto_reconnect
+    
+    return status
 
 
 def test_audio_output() -> bool:
