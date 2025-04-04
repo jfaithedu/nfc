@@ -11,7 +11,7 @@ from ...database import db_manager
 from ...nfc import nfc_controller
 from ..exceptions import ResourceNotFoundError, InvalidRequestError
 from ..middleware.auth import require_auth
-from backend.utils.logger import get_logger
+from . import get_logger
 
 logger = get_logger(__name__)
 

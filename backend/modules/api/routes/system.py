@@ -21,8 +21,7 @@ from ...nfc import nfc_controller
 from ...media import media_manager
 from ..exceptions import ResourceNotFoundError, InvalidRequestError
 from ..middleware.auth import require_auth, verify_pin
-from backend.utils.logger import get_logger
-from . import CONFIG, save_config
+from . import CONFIG, save_config, get_logger
 
 logger = get_logger(__name__)
 
