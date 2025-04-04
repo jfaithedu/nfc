@@ -108,46 +108,118 @@ def show_connected_device() -> None:
     print_device_info(device)
 
 
-def connect_to_device() -> None:
-    """Connect to a Bluetooth device."""
+def pair_device() -> None:
+    """Pair with a Bluetooth device."""
     global audio_controller
-    print_header("Connect to Device")
+    print_header("Pair with Device")
     
-    # Show paired devices first
-    devices = audio_controller.get_paired_devices()
-    if devices:
-        print("Paired devices:")
-        for i, device in enumerate(devices):
+    # Show discovered devices first
+    print("Starting discovery for nearby devices...")
+    audio_controller.start_discovery(timeout=10)
+    
+    # Wait for discovery
+    for i in range(10):
+        sys.stdout.write(f"\rDiscovering... {i+1}/10s")
+        sys.stdout.flush()
+        time.sleep(1)
+    print("\rDiscovery complete!             ")
+    
+    # Get discovered devices
+    discovered = audio_controller.get_discovered_devices()
+    
+    if discovered:
+        print("\nDiscovered devices:")
+        for i, device in enumerate(discovered):
             print(f"{i+1}. {device.get('name', 'Unknown')} ({device.get('address')})")
+    else:
+        print("\nNo devices discovered.")
     
     # Ask for device address
-    print("\nEnter the Bluetooth address of the device to connect to")
+    print("\nEnter the Bluetooth address of the device to pair with")
     print("(format: 00:11:22:33:44:55)")
     
-    if devices:
+    if discovered:
         print("Or enter a number to select from the list above")
-        
+    
     address = input("Device: ").strip()
     
     # Check if input is a number for selection from list
-    if devices and address.isdigit():
+    if discovered and address.isdigit():
         index = int(address) - 1
-        if 0 <= index < len(devices):
-            address = devices[index].get('address')
+        if 0 <= index < len(discovered):
+            address = discovered[index].get('address')
         else:
             print("Invalid selection.")
             return
     
-    print(f"Connecting to {address}...")
-    if audio_controller.connect_device(address):
-        print("Successfully connected!")
+    if not address:
+        print("No address provided, cancelling.")
+        return
+    
+    print(f"Pairing with {address}...")
+    try:
+        if audio_controller.bt_manager.pair_device(address):
+            print("Successfully paired!")
+            
+            # Ask if they want to connect too
+            print("\nDo you want to connect to this device now? (y/n)")
+            if input().strip().lower() == 'y':
+                connect_to_device(address)
+        else:
+            print("Failed to pair with device.")
+    except Exception as e:
+        print(f"Error during pairing: {e}")
+
+def connect_to_device(selected_address: str = None) -> None:
+    """Connect to a Bluetooth device."""
+    global audio_controller
+    print_header("Connect to Device")
+    
+    address = selected_address
+    
+    if not address:
+        # Show paired devices first
+        devices = audio_controller.get_paired_devices()
+        if devices:
+            print("Paired devices:")
+            for i, device in enumerate(devices):
+                print(f"{i+1}. {device.get('name', 'Unknown')} ({device.get('address')})")
         
-        # Show connected device details
-        device = audio_controller.get_connected_device()
-        if device:
-            print_device_info(device)
-    else:
-        print("Failed to connect to device.")
+        # Ask for device address
+        print("\nEnter the Bluetooth address of the device to connect to")
+        print("(format: 00:11:22:33:44:55)")
+        
+        if devices:
+            print("Or enter a number to select from the list above")
+            
+        address = input("Device: ").strip()
+        
+        # Check if input is a number for selection from list
+        if devices and address.isdigit():
+            index = int(address) - 1
+            if 0 <= index < len(devices):
+                address = devices[index].get('address')
+            else:
+                print("Invalid selection.")
+                return
+    
+    if not address:
+        print("No address provided, cancelling.")
+        return
+    
+    print(f"Connecting to {address}...")
+    try:
+        if audio_controller.bt_manager.connect_device(address):
+            print("Successfully connected!")
+            
+            # Show connected device details
+            device = audio_controller.get_connected_device()
+            if device:
+                print_device_info(device)
+        else:
+            print("Failed to connect to device.")
+    except Exception as e:
+        print(f"Error during connection: {e}")
 
 
 def disconnect_current_device() -> None:
@@ -414,14 +486,15 @@ def main() -> None:
             print("1.  Discover Bluetooth devices")
             print("2.  Show paired devices")
             print("3.  Show connected device")
-            print("4.  Connect to device")
-            print("5.  Disconnect current device")
-            print("6.  Forget (unpair) device")
-            print("7.  Test audio output")
-            print("8.  Play audio file")
-            print("9.  Volume control")
-            print("10. Show Bluetooth status")
-            print("11. Toggle auto-reconnect")
+            print("4.  Pair with device")
+            print("5.  Connect to paired device")
+            print("6.  Disconnect current device")
+            print("7.  Forget (unpair) device")
+            print("8.  Test audio output")
+            print("9.  Play audio file")
+            print("10. Volume control")
+            print("11. Show Bluetooth status")
+            print("12. Toggle auto-reconnect")
             print("q.  Quit")
             
             choice = input("\nEnter choice: ").strip().lower()
@@ -433,20 +506,22 @@ def main() -> None:
             elif choice == '3':
                 show_connected_device()
             elif choice == '4':
-                connect_to_device()
+                pair_device()
             elif choice == '5':
-                disconnect_current_device()
+                connect_to_device()
             elif choice == '6':
-                forget_paired_device()
+                disconnect_current_device()
             elif choice == '7':
-                test_audio()
+                forget_paired_device()
             elif choice == '8':
-                play_audio_file()
+                test_audio()
             elif choice == '9':
-                volume_control()
+                play_audio_file()
             elif choice == '10':
-                show_bluetooth_status()
+                volume_control()
             elif choice == '11':
+                show_bluetooth_status()
+            elif choice == '12':
                 toggle_auto_reconnect()
             elif choice == 'q':
                 break

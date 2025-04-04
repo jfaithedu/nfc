@@ -391,12 +391,91 @@ class BluetoothManager:
             key=lambda x: x.get('name', 'Unknown').lower()
         )
 
-    def connect_device(self, device_address: str) -> bool:
+    def pair_device(self, device_address: str) -> bool:
         """
-        Connect to a Bluetooth device.
+        Pair with a Bluetooth device (establish trusted relationship).
+        
+        This only pairs the device but does not establish an active connection.
+        To use the device, you still need to call connect_device() after pairing.
 
         Args:
             device_address (str): Bluetooth device address
+
+        Returns:
+            bool: True if paired successfully
+
+        Raises:
+            BluetoothConnectionError: If pairing fails
+        """
+        # Ensure device exists
+        device_info = self._find_device(device_address)
+        if not device_info:
+            raise BluetoothConnectionError(f"Device {device_address} not found")
+            
+        device, device_interface = device_info
+        
+        try:
+            # Stop discovery if active
+            if self.discovering:
+                self.stop_discovery()
+            
+            # Get device properties
+            props_interface = dbus.Interface(device, PROPERTIES_INTERFACE)
+            properties = props_interface.GetAll(DEVICE_INTERFACE)
+            
+            # Check if already paired
+            if properties.get('Paired', False):
+                logger.info(f"Device {device_address} is already paired")
+                
+                # Trust device if not already trusted
+                if not properties.get('Trusted', False):
+                    props_interface.Set(DEVICE_INTERFACE, 'Trusted', True)
+                    logger.info(f"Set device {device_address} as trusted")
+                
+                return True
+            
+            # Trust device
+            props_interface.Set(DEVICE_INTERFACE, 'Trusted', True)
+            logger.info(f"Set device {device_address} as trusted")
+            
+            # Perform pairing
+            logger.info(f"Pairing with device {device_address}...")
+            device_interface.Pair()
+            
+            # Wait for pairing to complete
+            for _ in range(10):  # Try up to 10 times with 1s delay
+                properties = props_interface.GetAll(DEVICE_INTERFACE)
+                if properties.get('Paired', False):
+                    # Save to paired devices
+                    if device_address not in self.paired_devices:
+                        self.paired_devices[device_address] = {
+                            'name': str(properties.get('Name', 'Unknown')),
+                            'address': device_address,
+                            'last_connected': 0  # Not connected yet
+                        }
+                        self._save_paired_devices()
+                    
+                    logger.info(f"Successfully paired with {device_address}")
+                    return True
+                time.sleep(1)
+                
+            raise BluetoothConnectionError(
+                f"Timed out waiting for pairing with {device_address}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to pair with {device_address}: {e}")
+            raise BluetoothConnectionError(f"Failed to pair with {device_address}: {e}")
+    
+    def connect_device(self, device_address: str, auto_pair: bool = True) -> bool:
+        """
+        Connect to a Bluetooth device.
+        
+        This establishes an active connection to an already paired device.
+        If the device is not paired and auto_pair is True, it will attempt to pair first.
+
+        Args:
+            device_address (str): Bluetooth device address
+            auto_pair (bool, optional): Whether to automatically pair if not paired
 
         Returns:
             bool: True if connected successfully
@@ -420,16 +499,15 @@ class BluetoothManager:
             props_interface = dbus.Interface(device, PROPERTIES_INTERFACE)
             properties = props_interface.GetAll(DEVICE_INTERFACE)
             
-            # Trust device if not already trusted
-            if not properties.get('Trusted', False):
-                props_interface.Set(DEVICE_INTERFACE, 'Trusted', True)
-                logger.info(f"Set device {device_address} as trusted")
-                
-            # Pair if not already paired
+            # Pair if not already paired and auto_pair is enabled
             if not properties.get('Paired', False):
-                logger.info(f"Pairing with device {device_address}...")
-                device_interface.Pair()
-                
+                if auto_pair:
+                    logger.info(f"Device {device_address} not paired, attempting to pair first")
+                    if not self.pair_device(device_address):
+                        raise BluetoothConnectionError(f"Failed to pair with {device_address}")
+                else:
+                    raise BluetoothConnectionError(f"Device {device_address} is not paired")
+            
             # Connect to the device
             logger.info(f"Connecting to device {device_address}...")
             device_interface.Connect()
@@ -478,13 +556,9 @@ class BluetoothManager:
                     else:
                         logger.warning(f"Device {device_address} does not support A2DP audio sink")
                     
-                    # Save to paired devices
-                    if device_address not in self.paired_devices:
-                        self.paired_devices[device_address] = {
-                            'name': str(properties.get('Name', 'Unknown')),
-                            'address': device_address,
-                            'last_connected': time.time()
-                        }
+                    # Update last connected time in paired devices
+                    if device_address in self.paired_devices:
+                        self.paired_devices[device_address]['last_connected'] = time.time()
                         self._save_paired_devices()
                     
                     logger.info(f"Successfully connected to {device_address}")
