@@ -31,9 +31,10 @@ from backend.modules.database import db_manager
 from backend.modules.api import api_server
 from backend.config import CONFIG
 
-# NFC tag detection thread
+# NFC tag detection globals
 nfc_detection_thread = None
 nfc_detection_running = False
+_nfc_exit_event = None  # Event to signal the continuous polling to stop
 
 def print_header(title):
     """Print a formatted header."""
@@ -395,20 +396,40 @@ def test_nfc():
             
         elif choice == '3':
             # Start continuous tag detection
-            global nfc_detection_thread, nfc_detection_running
+            global nfc_detection_thread, nfc_detection_running, _nfc_exit_event
             
             if nfc_detection_running:
                 print("Tag detection is already running")
                 continue
             
             print_subheader("Starting Continuous Tag Detection")
-            print("Monitoring for NFC tags. Press Enter to stop...")
+            print("Monitoring for NFC tags. Place and remove tags to see detection in action.")
+            print("Press Enter to stop...")
             
-            # Start detection in a separate thread
+            # Clean up any existing exit event
+            if _nfc_exit_event is not None:
+                _nfc_exit_event.set()
+                _nfc_exit_event = None
+                
+            # Create and start a new detection thread
             nfc_detection_running = True
-            nfc_detection_thread = threading.Thread(target=nfc_detection_worker)
+            nfc_detection_thread = threading.Thread(
+                target=nfc_detection_worker,
+                name="NFC-Detection-Thread"
+            )
             nfc_detection_thread.daemon = True
             nfc_detection_thread.start()
+            
+            # Give the thread a moment to start
+            time.sleep(0.5)
+            
+            # Check if it started successfully
+            if not nfc_detection_thread.is_alive():
+                print("❌ NFC detection failed to start")
+                nfc_detection_running = False
+                continue
+                
+            print("✅ NFC detection running - waiting for tags")
             
         elif choice == '4':
             # Stop tag detection
@@ -431,10 +452,56 @@ def test_nfc():
             print("\nPlace tag on reader and press Enter to write...")
             input()
             
+            # First detect the tag to ensure it's present
             try:
-                # Try to write the URL
+                # Poll for the tag first (without reading NDEF data)
+                result = nfc_controller.poll_for_tag(read_ndef=False)
+                if not result:
+                    print("❌ No tag detected! Please make sure the tag is on the reader.")
+                    continue
+                
+                # Convert the result to a UID string
+                if isinstance(result, tuple) and len(result) == 2:
+                    uid = result[0]  # Unpack tuple
+                else:
+                    uid = result
+                
+                print(f"✅ Tag detected: {uid}")
+                print(f"Writing URL: {url}")
+                
+                # Now write to the tag
                 if nfc_controller.write_ndef_uri(url):
                     print("✅ Successfully wrote URL to tag")
+                    
+                    # Verify by reading back
+                    try:
+                        print("Verifying by reading NDEF data...")
+                        ndef_data = nfc_controller.read_ndef_data()
+                        
+                        if ndef_data:
+                            found_url = None
+                            
+                            # Check direct URI in message
+                            if ndef_data.get('type') == 'uri':
+                                found_url = ndef_data.get('uri')
+                            
+                            # Check in records
+                            elif 'records' in ndef_data:
+                                for record in ndef_data['records']:
+                                    if 'decoded' in record and record['decoded'].get('type') == 'uri':
+                                        found_url = record['decoded'].get('uri')
+                                        break
+                            
+                            if found_url and found_url == url:
+                                print("✅ Verification successful - URL was written correctly")
+                            elif found_url:
+                                print(f"⚠️ Found URL: {found_url} (differs from written URL)")
+                            else:
+                                print("⚠️ Could not find URL in NDEF data after writing")
+                        else:
+                            print("⚠️ Could not read NDEF data for verification")
+                    except Exception as verify_e:
+                        print(f"⚠️ Could not verify data: {verify_e}")
                 else:
                     print("❌ Failed to write URL to tag")
             except Exception as e:
@@ -535,7 +602,9 @@ def test_nfc():
             # Back to main menu
             # Make sure to stop detection if running
             if nfc_detection_running:
+                print("Stopping NFC detection before returning to main menu...")
                 stop_nfc_detection()
+                print("Returning to main menu")
             return
         
         wait_for_key()
@@ -617,38 +686,72 @@ def nfc_detection_worker():
     """Worker function for continuous tag detection."""
     global nfc_detection_running
     
-    # Create an exit event to signal the polling thread to stop
+    # Create an exit event to signal when to stop polling
     exit_event = threading.Event()
     
     print("Starting continuous NFC tag detection...")
     
+    # This variable is shared between this function and stop_nfc_detection
+    # We need to store it in a global variable to signal when to stop
+    global _nfc_exit_event
+    _nfc_exit_event = exit_event
+    
     try:
-        # Use the approach from test_continuous_poll in test_nfc.py
-        # Instead of creating another thread, we'll directly call continuous_poll
-        # in this thread which was started from the main thread
+        # Set up tag detection callback
+        def tag_callback_wrapper(uid, ndef_info=None):
+            # Only process if still running
+            if nfc_detection_running:
+                try:
+                    # Call our tag callback
+                    tag_callback(uid, ndef_info)
+                    
+                    # Sleep briefly to avoid immediate re-detection of the same tag
+                    # and to give user time to process the result
+                    print("\nWaiting for 2 seconds before detecting next tag...")
+                    time.sleep(2)
+                    print("Ready for next tag")
+                except Exception as e:
+                    print(f"❌ Error in tag callback: {e}")
+            
+        # Start the continuous polling (this will run until exit_event is set)
         nfc_controller.continuous_poll(
-            callback=tag_callback,
-            interval=0.1,
+            callback=tag_callback_wrapper,
+            interval=0.1, 
             exit_event=exit_event,
             read_ndef=True
         )
     except Exception as e:
         print(f"❌ Error during NFC detection: {e}")
     finally:
-        # Signal the exit event in case it wasn't already
+        # Make sure the exit event is set
         exit_event.set()
         print("NFC detection worker stopped")
         nfc_detection_running = False
 
 def stop_nfc_detection():
     """Stop NFC tag detection."""
-    global nfc_detection_running, nfc_detection_thread
+    global nfc_detection_running, nfc_detection_thread, _nfc_exit_event
     
+    # First signal the exit event to tell the continuous polling to stop
+    if '_nfc_exit_event' in globals() and _nfc_exit_event is not None:
+        _nfc_exit_event.set()
+    
+    # Set the running flag to false
     nfc_detection_running = False
+    
+    # Wait for the detection thread to terminate
     if nfc_detection_thread and nfc_detection_thread.is_alive():
-        # Wait for thread to terminate gracefully
+        print("Waiting for NFC detection to stop...")
         nfc_detection_thread.join(2.0)
+        if nfc_detection_thread.is_alive():
+            print("Warning: NFC detection thread is still running")
+        else:
+            print("NFC detection thread stopped")
+    
+    # Clean up
     nfc_detection_thread = None
+    if '_nfc_exit_event' in globals():
+        _nfc_exit_event = None
 
 def test_media():
     """Test media functionality."""
@@ -1268,6 +1371,10 @@ def main():
                 wait_for_key()
             elif choice == '7':
                 # Exit
+                # Make sure continuous NFC detection is stopped before exiting
+                if nfc_detection_running:
+                    print("Stopping NFC detection before exit...")
+                    stop_nfc_detection()
                 break
             else:
                 print("Invalid choice. Please try again.")
