@@ -849,7 +849,7 @@ def nfc_detection_worker():
 
 def stop_nfc_detection():
     """Stop NFC tag detection."""
-    global nfc_detection_running, nfc_detection_thread, _nfc_exit_event
+    global nfc_detection_running, nfc_detection_thread, _nfc_exit_event, _last_detected_tag
     
     # First signal the exit event to tell the continuous polling to stop
     if '_nfc_exit_event' in globals() and _nfc_exit_event is not None:
@@ -857,6 +857,15 @@ def stop_nfc_detection():
     
     # Set the running flag to false
     nfc_detection_running = False
+    
+    # If a tag was detected, clear it and stop any playback
+    if _last_detected_tag is not None:
+        print(f"Stopping any playback from tag {_last_detected_tag}")
+        try:
+            audio_controller.stop()
+        except:
+            pass
+        _last_detected_tag = None
     
     # Wait for the detection thread to terminate
     if nfc_detection_thread and nfc_detection_thread.is_alive():
