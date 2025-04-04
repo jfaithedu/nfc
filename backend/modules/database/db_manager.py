@@ -434,25 +434,65 @@ def save_media_info(media_id, info):
     try:
         current_time = int(time.time())
         
-        # Extract fields from info
-        title = info.get('title', '')
-        source = info.get('source', '')
-        source_url = info.get('source_url', '')
-        url = info.get('url', '')  # Added URL field
-        duration = info.get('duration', 0)
-        thumbnail_path = info.get('thumbnail_path', '')
-        local_path = info.get('local_path', '')
-        
-        # Store any additional fields as metadata
-        metadata = {k: v for k, v in info.items() if k not in 
-                   ['title', 'source', 'source_url', 'duration', 'thumbnail_path', 'local_path']}
-        
         with DatabaseConnection(db_path) as conn:
             cursor = conn.cursor()
             
             # Check if media already exists
-            cursor.execute("SELECT id FROM media WHERE id = ?", (media_id,))
-            media_exists = cursor.fetchone() is not None
+            cursor.execute("SELECT * FROM media WHERE id = ?", (media_id,))
+            existing_media = cursor.fetchone()
+            media_exists = existing_media is not None
+            
+            # Special case for updating just the last_played time
+            if media_exists and len(info) == 1 and 'last_played' in info:
+                cursor.execute("""
+                    UPDATE media 
+                    SET last_played = ?
+                    WHERE id = ?
+                """, (
+                    info['last_played'],
+                    media_id
+                ))
+                return True
+                
+            # For complete updates or inserts, prepare all values
+            # Extract fields from info, using existing values if available
+            if media_exists:
+                existing_data = dict(existing_media)
+                title = info.get('title', existing_data.get('title', ''))
+                source = info.get('source', existing_data.get('source', ''))
+                source_url = info.get('source_url', existing_data.get('source_url', ''))
+                url = info.get('url', existing_data.get('url', ''))
+                duration = info.get('duration', existing_data.get('duration', 0))
+                thumbnail_path = info.get('thumbnail_path', existing_data.get('thumbnail_path', ''))
+                local_path = info.get('local_path', existing_data.get('local_path', ''))
+                
+                # Extract existing metadata and merge with new values
+                existing_metadata = {}
+                if existing_data.get('metadata'):
+                    existing_metadata = json_to_dict(existing_data['metadata'])
+                
+                # Store any additional fields as metadata, merging with existing
+                metadata = {k: v for k, v in info.items() if k not in 
+                           ['title', 'source', 'source_url', 'url', 'duration', 'thumbnail_path', 'local_path']}
+                
+                # Merge new metadata with existing
+                for k, v in metadata.items():
+                    existing_metadata[k] = v
+                
+                metadata = existing_metadata
+            else:
+                # New media entry
+                title = info.get('title', '')
+                source = info.get('source', '')
+                source_url = info.get('source_url', '')
+                url = info.get('url', '')
+                duration = info.get('duration', 0)
+                thumbnail_path = info.get('thumbnail_path', '')
+                local_path = info.get('local_path', '')
+                
+                # Store any additional fields as metadata
+                metadata = {k: v for k, v in info.items() if k not in 
+                           ['title', 'source', 'source_url', 'url', 'duration', 'thumbnail_path', 'local_path']}
             
             if media_exists:
                 # Update existing media
