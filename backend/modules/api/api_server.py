@@ -17,8 +17,50 @@ from ..database import db_manager
 from ..nfc import nfc_controller
 from ..media import media_manager
 from ..audio import audio_controller
-from backend.config import CONFIG
-from backend.utils.logger import get_logger
+
+# Import config using a direct filesystem approach
+import os
+import sys
+import importlib.util
+
+# Get the backend directory path
+backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+config_path = os.path.join(backend_dir, 'config.py')
+utils_dir = os.path.join(backend_dir, 'utils')
+logger_path = os.path.join(utils_dir, 'logger.py')
+
+# Add the backend directory to the path if it's not already there
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
+
+# Import the CONFIG from config.py
+try:
+    spec = importlib.util.spec_from_file_location("config", config_path)
+    config_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(config_module)
+    CONFIG = config_module.CONFIG
+except Exception as e:
+    print(f"Error importing CONFIG: {e}")
+    # Provide a default config as fallback
+    CONFIG = {
+        'api': {
+            'host': '0.0.0.0',
+            'port': 5000,
+            'debug': False
+        }
+    }
+
+# Import get_logger from utils.logger
+try:
+    spec = importlib.util.spec_from_file_location("logger", logger_path)
+    logger_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(logger_module)
+    get_logger = logger_module.get_logger
+except Exception as e:
+    print(f"Error importing get_logger: {e}")
+    # Fallback logger function
+    def get_logger(name):
+        return logging.getLogger(name)
 
 # Import routes
 from .routes import tags, media, system, nfc_writer
