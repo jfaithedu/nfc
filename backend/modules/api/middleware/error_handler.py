@@ -8,7 +8,7 @@ import traceback
 from flask import jsonify, request
 from werkzeug.exceptions import NotFound, BadRequest, Unauthorized, InternalServerError
 
-from ....utils.logger import get_logger
+from backend.utils.logger import get_logger
 from ..exceptions import APIError
 
 logger = get_logger(__name__)

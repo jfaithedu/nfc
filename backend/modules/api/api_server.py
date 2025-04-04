@@ -17,9 +17,8 @@ from ..database import db_manager
 from ..nfc import nfc_controller
 from ..media import media_manager
 from ..audio import audio_controller
-from ... import config
-from ...config import CONFIG
-from ....utils.logger import get_logger
+from backend.config import CONFIG
+from backend.utils.logger import get_logger
 
 # Import routes
 from .routes import tags, media, system, nfc_writer, auth
