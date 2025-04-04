@@ -3,6 +3,7 @@ flask==2.0.1  # Web API framework
 flask-cors==3.0.10  # Cross-origin resource sharing
 waitress==2.0.0  # Production WSGI server
 python-dotenv==0.19.0  # Environment variable management
+werkzeug==2.3.7  # HTTP utilities - compatible with flask
 
 # NFC reading
 # RPi.GPIO==0.7.0  # GPIO access - Install via apt instead
