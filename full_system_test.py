@@ -316,31 +316,40 @@ def test_nfc():
             # Try for up to 10 seconds
             tag_found = False
             for i in range(10):
-                tag_uid, ndef_info = nfc_controller.poll_for_tag(read_ndef=True)
+                result = nfc_controller.poll_for_tag(read_ndef=True)
                 
-                if tag_uid:
-                    tag_found = True
-                    print(f"\n✅ Tag detected: {tag_uid}")
-                    
-                    # Check if tag has media association
-                    media_info = db_manager.get_media_for_tag(tag_uid)
-                    if media_info:
-                        print(f"  Tag is associated with media: {media_info.get('title')}")
+                if result is not None:
+                    # Check if result is a tuple (uid, ndef_info) or just a UID string
+                    if isinstance(result, tuple) and len(result) == 2:
+                        tag_uid, ndef_info = result
                     else:
-                        print("  Tag is not associated with any media")
+                        # If it's not a tuple, assume it's just the UID
+                        tag_uid = result
+                        ndef_info = None
                     
-                    # Check for NDEF data
-                    if ndef_info:
-                        print("\nNDEF data found:")
-                        print(f"  Type: {ndef_info.get('type')}")
-                        if ndef_info.get('type') == 'uri':
-                            print(f"  URI: {ndef_info.get('uri')}")
-                        elif ndef_info.get('type') == 'text':
-                            print(f"  Text: {ndef_info.get('text')}")
-                    else:
-                        print("\nNo NDEF data found on tag")
-                    
-                    break
+                    if tag_uid:
+                        tag_found = True
+                        print(f"\n✅ Tag detected: {tag_uid}")
+                        
+                        # Check if tag has media association
+                        media_info = db_manager.get_media_for_tag(tag_uid)
+                        if media_info:
+                            print(f"  Tag is associated with media: {media_info.get('title')}")
+                        else:
+                            print("  Tag is not associated with any media")
+                        
+                        # Check for NDEF data
+                        if ndef_info:
+                            print("\nNDEF data found:")
+                            print(f"  Type: {ndef_info.get('type')}")
+                            if ndef_info.get('type') == 'uri':
+                                print(f"  URI: {ndef_info.get('uri')}")
+                            elif ndef_info.get('type') == 'text':
+                                print(f"  Text: {ndef_info.get('text')}")
+                        else:
+                            print("\nNo NDEF data found on tag")
+                        
+                        break
                 
                 print(".", end="", flush=True)
                 time.sleep(1)
@@ -457,7 +466,21 @@ def nfc_detection_worker():
     while nfc_detection_running:
         try:
             # Poll for tag
-            tag_uid, ndef_info = nfc_controller.poll_for_tag(read_ndef=True)
+            result = nfc_controller.poll_for_tag(read_ndef=True)
+            
+            # Handle different return types
+            if result is None:
+                # No tag detected, wait briefly and try again
+                time.sleep(0.1)
+                continue
+            
+            # Check if result is a tuple (uid, ndef_info) or just a UID string
+            if isinstance(result, tuple) and len(result) == 2:
+                tag_uid, ndef_info = result
+            else:
+                # If it's not a tuple, assume it's just the UID
+                tag_uid = result
+                ndef_info = None
             
             if tag_uid and tag_uid != last_detected_tag:
                 print(f"\n✅ Tag detected: {tag_uid}")
