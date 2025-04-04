@@ -19,7 +19,7 @@ PyGObject==3.40.1  # Python bindings for GLib/GObject
 pulsectl==21.10.5  # PulseAudio control
 
 # Database
-sqlite3-api==0.1.0  # SQLite database management
+sqlite3-api==2.0.4  # SQLite database management
 
 # Utility
 python-slugify==5.0.2  # URL/filename slugification
