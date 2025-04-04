@@ -4,6 +4,30 @@
 
 set -e  # Exit on error
 
+# --- Configuration ---
+# Default start step
+start_step=1
+total_steps=5
+
+# --- Argument Parsing ---
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --start-step)
+            if [[ "$2" =~ ^[1-9][0-9]*$ ]] && [ "$2" -le $total_steps ]; then
+                start_step="$2"
+                echo "Starting setup from step $start_step."
+                shift # past argument
+            else
+                echo "Error: --start-step requires a valid number between 1 and $total_steps." >&2
+                exit 1
+            fi
+            ;;
+        *) echo "Unknown parameter passed: $1"; exit 1 ;;
+    esac
+    shift # past argument or value
+done
+
+
 echo "============================================================="
 echo "                NFC Project Setup Script                     "
 echo "============================================================="
@@ -20,9 +44,9 @@ check_root() {
     fi
 }
 
-# Function to create virtual environment and install dependencies
+# Function to create virtual environment and install dependencies (Step 1)
 setup_python_venv() {
-    echo -e "\n[1/5] Setting up Python virtual environment..."
+    echo -e "\n[1/$total_steps] Setting up Python virtual environment..."
 
     VENV_DIR="$PROJECT_ROOT/venv"
 
@@ -88,11 +112,10 @@ setup_python_venv() {
 
     echo "Python virtual environment setup/update completed"
 }
-
-# Function to configure audio system
+# Function to configure audio system (Step 2)
 setup_audio_system_deps() {
-    echo -e "\n[2/5] Configuring audio module..."
-    
+    echo -e "\n[2/$total_steps] Configuring audio module system dependencies..."
+
     # Configure BlueALSA
     echo "Configuring BlueALSA..."
     if [ ! -f /etc/systemd/system/bluealsa.service ]; then
@@ -148,11 +171,10 @@ EOF
     
     echo "Audio module system setup completed"
 }
-
-# Function to setup the NFC module system dependencies
+# Function to setup the NFC module system dependencies (Step 3)
 setup_nfc_system_deps() {
-    echo -e "\n[3/5] Configuring NFC module..."
-    
+    echo -e "\n[3/$total_steps] Configuring NFC module system dependencies..."
+
     # Setup GPIO and I2C access permissions
     if ! grep -q "^SUBSYSTEM==\"gpio\", GROUP=\"gpio\"" /etc/udev/rules.d/99-com.rules 2>/dev/null; then
         bash -c 'cat > /etc/udev/rules.d/99-com.rules << EOF
@@ -203,11 +225,10 @@ EOF'
         echo "⚠️  I2C was enabled in config.txt. A reboot will be required after setup completes."
     fi
 }
-
-# Function to setup frontend dependencies
+# Function to setup frontend dependencies (Step 4)
 setup_frontend() {
-    echo -e "\n[4/5] Setting up frontend..."
-    
+    echo -e "\n[4/$total_steps] Setting up frontend..."
+
     # Install Node.js dependencies
     cd "$PROJECT_ROOT/frontend"
     
@@ -224,13 +245,19 @@ setup_frontend() {
     
     echo "Frontend setup completed"
 }
-
-# Function to verify the setup
+# Function to verify the setup (Step 5)
 verify_setup() {
-    echo -e "\n[5/5] Verifying setup..."
-    
+    echo -e "\n[5/$total_steps] Verifying setup..."
+
+    # Activate venv if it exists and isn't already active (needed if skipping steps)
+    VENV_DIR="$PROJECT_ROOT/venv"
+    if [ -z "$VIRTUAL_ENV" ] && [ -f "$VENV_DIR/bin/activate" ]; then
+        echo "Activating virtual environment for verification..."
+        source "$VENV_DIR/bin/activate"
+    fi
+
     # Verify Python virtual environment
-    if [ -d "$PROJECT_ROOT/venv" ]; then
+    if [ -d "$VENV_DIR" ]; then
         echo "✅ Python virtual environment exists"
     else
         echo "❌ Python virtual environment does not exist"
@@ -267,10 +294,13 @@ verify_setup() {
     echo "Setup verification completed"
 }
 
-# Main function
+# Main execution logic
 main() {
     echo "Starting comprehensive project setup..."
-    
+    local current_step=0 # Use 0 for pre-requisite steps
+
+    # --- Pre-requisite System Dependencies (Always Run) ---
+    echo -e "\n[Pre-requisites] Ensuring core system packages are installed..."
     # Update package lists first
     echo "Updating package lists..."
     apt-get update
@@ -293,12 +323,11 @@ main() {
 
     # Run ldconfig to ensure library cache is updated
     ldconfig
-    
-    # Install all remaining system dependencies
+
+    # Install all remaining system dependencies (Considered part of pre-requisites)
     echo "Installing remaining system dependencies..."
     apt-get install -y --no-install-recommends \
         build-essential \
-        gir1.2-gtk-3.0 \
         bluetooth \
         bluez \
         bluez-tools \
@@ -324,29 +353,63 @@ main() {
         libgpiod2 \
         nodejs \
         npm
-    
-    # Setup Python virtual environment
-    setup_python_venv
-    
-    # Setup audio system dependencies
-    setup_audio_system_deps
-    
-    # Setup NFC system dependencies
-    setup_nfc_system_deps
-    
-    # Setup frontend
-    setup_frontend
-    
-    # Verify PyGObject installation
-    echo "Verifying PyGObject installation..."
-    source "$VENV_DIR/bin/activate"
-    python3 -c "import gi; print('PyGObject (gi) is properly installed and accessible in the virtual environment')"
-    
-    # Verify setup
-    verify_setup
-    
+
+    # --- Step 1: Python Virtual Environment ---
+    current_step=1
+    if [[ $start_step -le $current_step ]]; then
+        setup_python_venv
+    else
+        echo -e "\nSkipping Step $current_step/$total_steps: Python virtual environment setup."
+    fi
+
+    # --- Step 2: Audio System Dependencies ---
+    current_step=2
+    if [[ $start_step -le $current_step ]]; then
+        setup_audio_system_deps
+    else
+        echo -e "\nSkipping Step $current_step/$total_steps: Audio module system dependencies setup."
+    fi
+
+    # --- Step 3: NFC System Dependencies ---
+    current_step=3
+    if [[ $start_step -le $current_step ]]; then
+        setup_nfc_system_deps
+    else
+        echo -e "\nSkipping Step $current_step/$total_steps: NFC module system dependencies setup."
+    fi
+
+    # --- Step 4: Frontend Setup ---
+    current_step=4
+    if [[ $start_step -le $current_step ]]; then
+        setup_frontend
+    else
+        echo -e "\nSkipping Step $current_step/$total_steps: Frontend setup."
+    fi
+
+    # --- Step 5: Verification ---
+    current_step=5
+    if [[ $start_step -le $current_step ]]; then
+        # Verify PyGObject installation (needs venv)
+        VENV_DIR="$PROJECT_ROOT/venv"
+        if [ -f "$VENV_DIR/bin/activate" ]; then
+             echo "Verifying PyGObject installation..."
+             source "$VENV_DIR/bin/activate"
+             python3 -c "import gi; print('PyGObject (gi) is properly installed and accessible in the virtual environment')" || echo "Warning: PyGObject verification failed."
+        else
+             echo "Warning: Cannot verify PyGObject, virtual environment not found."
+        fi
+        verify_setup
+    else
+        echo -e "\nSkipping Step $current_step/$total_steps: Setup verification."
+    fi
+
+
     echo -e "\n============================================================="
-    echo "                  Setup Completed Successfully                  "
+    if [[ $start_step -eq 1 ]]; then
+        echo "          Full Setup Process Completed Successfully           "
+    else
+        echo "        Setup Process (from step $start_step) Completed Successfully      "
+    fi
     echo "============================================================="
     echo
     echo "To use the project:"
