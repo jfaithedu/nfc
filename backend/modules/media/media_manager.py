@@ -470,13 +470,13 @@ def clean_cache(older_than=None, force=False):
         max_size_bytes = cache_status['max_size_mb'] * 1024 * 1024
         current_size_bytes = cache_status['total_size_bytes']
         
-        # If not forcing and under size limit, check if cleaning needed
-        if not force and current_size_bytes < max_size_bytes and not older_than:
-            logger.debug(f"Cache size {current_size_bytes} is under limit {max_size_bytes}, not cleaning")
+        # Always skip automatic cleaning, only clean if forced
+        if not force:
+            logger.debug("Permanent cache enabled, skipping automatic cleanup")
             return {
                 'cleaned_bytes': 0,
                 'deleted_files': 0,
-                'message': "Cache is under size limit, no cleaning needed"
+                'message': "Permanent cache enabled, no cleaning needed"
             }
         
         # Collect files to clean

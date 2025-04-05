@@ -29,7 +29,8 @@ DEFAULT_CONFIG = {
     "media": {
         "cache_dir": "data/media_cache",
         "allowed_formats": ["mp3", "wav", "ogg", "m4a"],
-        "max_cache_size_mb": 1000,  # 1 GB
+        "max_cache_size_mb": 10000,  # 10 GB - increased for permanent caching
+        "cache_cleanup_disabled": True,  # Disable automatic cache cleanup
         "yt_dlp_options": {
             "format": "bestaudio/best",
             "postprocessors": [{
